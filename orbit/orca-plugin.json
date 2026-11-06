@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "orbit-projects",
+  "name": "Orbit Projects",
+  "version": "0.1.0",
+  "description": "Kanban board of the repo's .orbit tasks with the agents working on them.",
+  "engines": { "orca": ">=1.4.246" },
+  "pluginApi": 1,
+  "main": "worker/main.mjs",
+  "contributes": {
+    "panels": [
+      {
+        "id": "board",
+        "title": "Orbit",
+        "icon": "layers",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "events": [{ "on": "agent.status.changed" }]
+  },
+  "capabilities": [{ "kind": "workspace:read" }, { "kind": "agent:read" }, { "kind": "storage:own" }]
+}
