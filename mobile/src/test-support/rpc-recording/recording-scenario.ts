@@ -54,6 +54,8 @@ export type RecordingScenario = DeclaredDeviceState & {
     partitions: readonly string[]
     request: string
     params: unknown
+    /** The scripted request this branch answers in place of, when it sends a different method. */
+    replaces?: string
   }[]
   bridgeOperations?: { request: string; probeSite: string; methods: readonly string[] }[]
   lineage?: ScenarioLineage

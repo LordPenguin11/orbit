@@ -13053,6 +13053,23 @@
       "family": "tasks.item-status-gitlab",
       "sites": ["mobile/src/tasks/use-mobile-tasks-gitlab-github-status-actions.tsx"],
       "schedules": [],
+      "replyBranches": [
+        {
+          "site": "status.get#1",
+          "partitions": [
+            "inner-ok-missing",
+            "inner-false-string-error",
+            "inner-false-object-error"
+          ],
+          "request": "github.workItem#1",
+          "replaces": "github.updateIssue#1",
+          "params": {
+            "number": 9,
+            "repo": "id:repo-1",
+            "type": "issue"
+          }
+        }
+      ],
       "steps": [
         {
           "action": "mount",
@@ -14266,6 +14283,23 @@
       "family": "tasks.project-row-files-merge",
       "sites": ["mobile/src/tasks/use-mobile-tasks-project-file-merge-actions.tsx"],
       "schedules": [],
+      "replyBranches": [
+        {
+          "site": "status.get#1",
+          "partitions": [
+            "inner-ok-missing",
+            "inner-false-string-error",
+            "inner-false-object-error"
+          ],
+          "request": "github.workItem#1",
+          "replaces": "github.updateIssue#1",
+          "params": {
+            "number": 9,
+            "repo": "id:repo-1",
+            "type": "issue"
+          }
+        }
+      ],
       "steps": [
         {
           "action": "mount",

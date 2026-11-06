@@ -130,6 +130,7 @@ export function driveReplyMatrix(
       const branch = base.replyBranches?.find(
         (entry) => entry.site === request && entry.partitions.includes(partition.id)
       )
+      const replaced = branch?.replaces ?? branch?.request
       return {
         divergence,
         scenario: {
@@ -138,7 +139,7 @@ export function driveReplyMatrix(
           ...(branch
             ? {
                 bridgeOperations: base.bridgeOperations?.filter(
-                  (entry) => entry.request !== branch.request
+                  (entry) => entry.request !== replaced
                 )
               }
             : {}),
@@ -153,11 +154,11 @@ export function driveReplyMatrix(
               }
             : {}),
           steps: base.steps.flatMap((original, index): ScenarioStep[] => {
-            if (branch && original.bridgeSite && original.site === `${branch.request}.native-1`) {
+            if (branch && original.bridgeSite && original.site === `${replaced}.native-1`) {
               return []
             }
             const step =
-              branch && 'complete' in original && original.site === branch.request
+              branch && 'complete' in original && original.site === replaced
                 ? {
                     ...original,
                     params: branch.params,

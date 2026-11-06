@@ -291,6 +291,11 @@
         "reviewRequests": []
       }
     },
+    "550d6de9d5f5": {
+      "name": "github.workItem#1",
+      "ordinal": 35,
+      "json": "{\"id\":\"frame-5\",\"deviceToken\":\"recording-device\",\"method\":\"github.workItem\",\"params\":{\"repo\":\"id:repo-1\",\"number\":9,\"type\":\"issue\"}}"
+    },
     "593d4ea7938c": {
       "name": "status.get#1",
       "ordinal": 31,
@@ -970,6 +975,44 @@
       "ordinal": 34,
       "value": false
     },
+    "d7a7a76ea66d": {
+      "name": "github.workItem#1",
+      "ordinal": 34,
+      "args": [
+        {
+          "name": "method",
+          "value": "github.workItem"
+        },
+        {
+          "name": "params",
+          "value": {
+            "number": 9,
+            "repo": "id:repo-1",
+            "type": "issue"
+          }
+        },
+        {
+          "name": "options",
+          "value": {
+            "beforeSend": "[local beforeSend]",
+            "failWhenDisconnected": true,
+            "timeoutMs": 30000
+          }
+        }
+      ],
+      "settlement": {
+        "status": "fulfilled",
+        "startedAt": 0,
+        "settledAt": 0,
+        "value": {
+          "id": "frame-5",
+          "ok": true,
+          "result": {
+            "ok": true
+          }
+        }
+      }
+    },
     "d8e7d81311a9": {
       "name": "mutatingStatus",
       "ordinal": 37,
@@ -1525,8 +1568,20 @@
       {
         "id": "tk-project-row-files-merge.inner-ok-missing:issue-state-settled",
         "observation": {
-          "sender": ["8d7ac6f2573d", "e3de0d18d0dc", "8989e41d1c1e", "6fbf1b8cf5cf"],
-          "payloads": ["c6b185002fec", "899dc22eb082", "f5c29abaf308", "b3ff73919780"],
+          "sender": [
+            "8d7ac6f2573d",
+            "e3de0d18d0dc",
+            "8989e41d1c1e",
+            "6fbf1b8cf5cf",
+            "d7a7a76ea66d"
+          ],
+          "payloads": [
+            "c6b185002fec",
+            "899dc22eb082",
+            "f5c29abaf308",
+            "b3ff73919780",
+            "550d6de9d5f5"
+          ],
           "settlements": {
             "mount": "eb79a9b3682a",
             "expand-0": "eb79a9b3682a",
@@ -1561,7 +1616,7 @@
             "c2ebef7f076f",
             "8862f0950552",
             "c0f0a440afe3",
-            "d773683f6bb9"
+            "9f963399c2ce"
           ]
         }
       },
@@ -1573,14 +1628,16 @@
             "e3de0d18d0dc",
             "8989e41d1c1e",
             "6fbf1b8cf5cf",
-            "75558b6d4557"
+            "d7a7a76ea66d",
+            "a7480d9dd9a2"
           ],
           "payloads": [
             "c6b185002fec",
             "899dc22eb082",
             "f5c29abaf308",
             "b3ff73919780",
-            "7a1f26fbf2d4"
+            "550d6de9d5f5",
+            "39ae33a4e8d3"
           ],
           "settlements": {
             "mount": "eb79a9b3682a",
@@ -1617,18 +1674,30 @@
             "c2ebef7f076f",
             "8862f0950552",
             "c0f0a440afe3",
-            "d773683f6bb9",
-            "291c000ad099",
-            "d8e7d81311a9",
-            "7810e7c3912d"
+            "9f963399c2ce",
+            "2141fc3d6fbb",
+            "60e8d2f72874",
+            "8d4edaf085d8"
           ]
         }
       },
       {
         "id": "tk-project-row-files-merge.inner-false-string-error:issue-state-settled",
         "observation": {
-          "sender": ["8d7ac6f2573d", "e3de0d18d0dc", "8989e41d1c1e", "16ac1fc6c9ba"],
-          "payloads": ["c6b185002fec", "899dc22eb082", "f5c29abaf308", "b3ff73919780"],
+          "sender": [
+            "8d7ac6f2573d",
+            "e3de0d18d0dc",
+            "8989e41d1c1e",
+            "16ac1fc6c9ba",
+            "d7a7a76ea66d"
+          ],
+          "payloads": [
+            "c6b185002fec",
+            "899dc22eb082",
+            "f5c29abaf308",
+            "b3ff73919780",
+            "550d6de9d5f5"
+          ],
           "settlements": {
             "mount": "eb79a9b3682a",
             "expand-0": "eb79a9b3682a",
@@ -1663,7 +1732,7 @@
             "c2ebef7f076f",
             "8862f0950552",
             "c0f0a440afe3",
-            "d773683f6bb9"
+            "9f963399c2ce"
           ]
         }
       },
@@ -1675,14 +1744,16 @@
             "e3de0d18d0dc",
             "8989e41d1c1e",
             "16ac1fc6c9ba",
-            "75558b6d4557"
+            "d7a7a76ea66d",
+            "a7480d9dd9a2"
           ],
           "payloads": [
             "c6b185002fec",
             "899dc22eb082",
             "f5c29abaf308",
             "b3ff73919780",
-            "7a1f26fbf2d4"
+            "550d6de9d5f5",
+            "39ae33a4e8d3"
           ],
           "settlements": {
             "mount": "eb79a9b3682a",
@@ -1719,18 +1790,30 @@
             "c2ebef7f076f",
             "8862f0950552",
             "c0f0a440afe3",
-            "d773683f6bb9",
-            "291c000ad099",
-            "d8e7d81311a9",
-            "7810e7c3912d"
+            "9f963399c2ce",
+            "2141fc3d6fbb",
+            "60e8d2f72874",
+            "8d4edaf085d8"
           ]
         }
       },
       {
         "id": "tk-project-row-files-merge.inner-false-object-error:issue-state-settled",
         "observation": {
-          "sender": ["8d7ac6f2573d", "e3de0d18d0dc", "8989e41d1c1e", "593d4ea7938c"],
-          "payloads": ["c6b185002fec", "899dc22eb082", "f5c29abaf308", "b3ff73919780"],
+          "sender": [
+            "8d7ac6f2573d",
+            "e3de0d18d0dc",
+            "8989e41d1c1e",
+            "593d4ea7938c",
+            "d7a7a76ea66d"
+          ],
+          "payloads": [
+            "c6b185002fec",
+            "899dc22eb082",
+            "f5c29abaf308",
+            "b3ff73919780",
+            "550d6de9d5f5"
+          ],
           "settlements": {
             "mount": "eb79a9b3682a",
             "expand-0": "eb79a9b3682a",
@@ -1765,7 +1848,7 @@
             "c2ebef7f076f",
             "8862f0950552",
             "c0f0a440afe3",
-            "d773683f6bb9"
+            "9f963399c2ce"
           ]
         }
       },
@@ -1777,14 +1860,16 @@
             "e3de0d18d0dc",
             "8989e41d1c1e",
             "593d4ea7938c",
-            "75558b6d4557"
+            "d7a7a76ea66d",
+            "a7480d9dd9a2"
           ],
           "payloads": [
             "c6b185002fec",
             "899dc22eb082",
             "f5c29abaf308",
             "b3ff73919780",
-            "7a1f26fbf2d4"
+            "550d6de9d5f5",
+            "39ae33a4e8d3"
           ],
           "settlements": {
             "mount": "eb79a9b3682a",
@@ -1821,10 +1906,10 @@
             "c2ebef7f076f",
             "8862f0950552",
             "c0f0a440afe3",
-            "d773683f6bb9",
-            "291c000ad099",
-            "d8e7d81311a9",
-            "7810e7c3912d"
+            "9f963399c2ce",
+            "2141fc3d6fbb",
+            "60e8d2f72874",
+            "8d4edaf085d8"
           ]
         }
       },

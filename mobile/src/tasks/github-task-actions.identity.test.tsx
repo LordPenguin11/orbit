@@ -355,7 +355,7 @@ it('suppresses stale publication after a same-client disconnect/reconnect while 
   ).toEqual([false, true, false, true, false])
 })
 
-it('keeps the established old PR state route exact while refusing only an unsupported generic issue action', async () => {
+it('keeps the established old PR state route exact while refusing an old-server issue action that resolves elsewhere', async () => {
   const f = await mount()
   let pending!: Promise<void>
   await act(async () => {
@@ -389,6 +389,13 @@ it('keeps the established old PR state route exact while refusing only an unsupp
   })
   expect(f.client.requests.at(-1)?.method).toBe('status.get')
   await f.answer({ runtimeId: 'old', capabilities: [] })
+  expect(f.client.requests.at(-1)?.method).toBe('github.workItem')
+  await f.answer({
+    type: 'issue',
+    number: 93,
+    url: 'https://github.corp/upstream/widgets/issues/93',
+    labels: []
+  })
   await pending
   expect(f.read()).toMatchObject({
     actionItem: issue,
@@ -397,7 +404,8 @@ it('keeps the established old PR state route exact while refusing only an unsupp
   })
   expect(f.client.requests.map((request) => request.method)).toEqual([
     'github.updatePRState',
-    'status.get'
+    'status.get',
+    'github.workItem'
   ])
 })
 
