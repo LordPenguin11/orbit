@@ -1,6 +1,6 @@
 # Orbit step 1: project skill + progress board
 
-Status: step 1 + hooks + store tách đôi + panel theo focus + UI chi tiết/sửa + pause agent bằng CLI --interrupt xong, kiểm chứng thật. Rebrand (t-5) dừng có chủ đích.
+Status: bước 3 xong (feature/bug/subtask, QA, archive, sizing, Run), kiểm chứng thật. Rebrand (t-5) dừng có chủ đích.
 
 ## Mục tiêu
 1. Skill `orbit-project`: agent lập plan, docs, task theo template.
@@ -41,3 +41,12 @@ Status: step 1 + hooks + store tách đôi + panel theo focus + UI chi tiết/s�
 
 ## Ngoài phạm vi step 1
 Gantt/milestone, dependency graph, đồng bộ Jira/Linear, view toàn khung, rebrand Orbit.
+
+## Step 3: features, bug/subtask, QA, archive, sizing
+Quyết định: QA chỉ khuyến nghị (không chặn done). Effort = `estTokens` so với `maxSessionTokens` của profile
+(model+effort); khoảng hợp lý suy ra từ `fixedOverheadTokens`, `maxOverheadShare`, `maxFill`. Con số mặc định là
+giá trị khởi đầu chưa đo, chỉnh trong `.orbit/config.json`. Nút Run dùng `orca agent launch --model --effort`.
+- Loại: feature f-, task t-, bug b-, subtask s-. feature>(task|bug)>subtask. Trạng thái feature tính ra từ con.
+- Template riêng từng loại; ghi đè bằng `.orbit/templates/<loại>.md`.
+- Archive: `.orbit/archive/<thư mục loại>/`, ẩn khỏi panel, task phụ thuộc vẫn tính là xong.
+- M1 (t-19..t-22): loại mới, QA, archive, CLI. M2 (t-23,t-24): sizing. M3 (t-25..t-27): panel và Run.

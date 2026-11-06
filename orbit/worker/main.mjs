@@ -4,10 +4,30 @@ import { existsSync, mkdirSync, watch } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildBoard } from '../lib/board.mjs'
+import { rollupFeature } from '../lib/features.mjs'
+import { assess } from '../lib/sizing.mjs'
 import { agentsInRepo, resolveFocus } from '../lib/focus.mjs'
 import { planPause, taskEditedMessage } from '../lib/pause.mjs'
+import { runPrompt } from '../lib/run.mjs'
 import { appendReminder, decideTool, isGuardedTool, workspacePathOf } from '../lib/guard.mjs'
-import { editTask, findPrimaryRoot, listTasks, readTask, stateRoot, usesOrbit, worktreePaths } from '../lib/store.mjs'
+import {
+  archiveDone,
+  archiveItem,
+  archivedIds,
+  catalogFor,
+  editTask,
+  findPrimaryRoot,
+  listArchived,
+  listFeatures,
+  listWork,
+  profileFor,
+  readConfig,
+  readFeature,
+  readTask,
+  stateRoot,
+  usesOrbit,
+  worktreePaths
+} from '../lib/store.mjs'
 
 const ROOTS_TTL_MS = 5_000
 const INTERRUPT_GAP_MS = 300 // let the agent's prompt settle after the interrupt before the message is typed
@@ -27,18 +47,20 @@ export function deactivate() {
 // but `orca terminal send --interrupt` does, and it also reaches terminals outside the focused worktree.
 const bundledCli = join(dirname(process.execPath), '..', 'Resources', 'bin', 'orca') // macOS app layout
 
-function orcaTerminalSend(cli, terminalId, ...flags) {
+function orcaRun(cli, args) {
   return new Promise((resolve, reject) => {
-    execFile(cli, ['terminal', 'send', '--terminal', terminalId, ...flags, '--json'], { timeout: 8_000 }, (error, stdout) => {
+    execFile(cli, [...args, '--json'], { timeout: 15_000 }, (error, stdout) => {
       if (error) return reject(error)
       try {
-        return JSON.parse(stdout.slice(stdout.indexOf('{'))).ok ? resolve() : reject(new Error('the Orca CLI refused'))
+        const out = JSON.parse(stdout.slice(stdout.indexOf('{')))
+        return out.ok ? resolve(out) : reject(new Error('the Orca CLI refused'))
       } catch {
         return reject(new Error('unreadable Orca CLI output'))
       }
     })
   })
 }
+const orcaTerminalSend = (cli, terminalId, ...flags) => orcaRun(cli, ['terminal', 'send', '--terminal', terminalId, ...flags])
 
 /** @type {import('orca/worker').Activate} */
 export default async function activate(orca) {
@@ -55,7 +77,8 @@ export default async function activate(orca) {
   function watchRepo(root) {
     const state = join(stateRoot(root), 'state')
     mkdirSync(state, { recursive: true })
-    for (const dir of [state, ...worktreePaths(root).map((p) => join(p, '.orbit', 'tasks'))]) {
+    const folders = ['tasks', 'bugs', 'subtasks', 'features']
+    for (const dir of [state, ...worktreePaths(root).flatMap((p) => folders.map((f) => join(p, '.orbit', f)))]) {
       if (watchers.has(dir)) continue
       try {
         // ponytail: fs.watch is not recursive and can drop events; the 5s refresh and panel reopen cover gaps
@@ -113,7 +136,7 @@ export default async function activate(orca) {
     if (!workspacePath) return
     let tasks = []
     try {
-      tasks = listTasks(workspacePath)
+      tasks = listWork(workspacePath)
     } catch {
       return // not a git checkout readable here
     }
@@ -135,7 +158,28 @@ export default async function activate(orca) {
   })
 
   const label = (a) => a.title ?? a.paneKey
-  const liveAgents = () => [...agents.values()]
+  const cliPath = async () => (await orca.settings.get('orcaCli')) || (existsSync(bundledCli) ? bundledCli : 'orca')
+  // An agent whose terminal was closed never sends a final event, so it would stay "working" forever.
+  // Ask the Orca CLI which terminals exist; when it cannot answer (or truncates), keep what we know.
+  let terminalCache = { at: 0, handles: null }
+  async function liveTerminals() {
+    if (Date.now() - terminalCache.at < ROOTS_TTL_MS) return terminalCache.handles
+    let handles = null
+    try {
+      const out = await orcaRun(await cliPath(), ['terminal', 'list'])
+      if (!out.result?.truncated) handles = new Set(out.result.terminals.map((t) => t.handle))
+    } catch {
+      // no CLI: show every agent we know
+    }
+    terminalCache = { at: Date.now(), handles }
+    return handles
+  }
+  async function liveAgents() {
+    const all = [...agents.values()]
+    if (!all.some((a) => a.terminalId)) return all
+    const handles = await liveTerminals()
+    return handles ? all.filter((a) => !a.terminalId || handles.has(a.terminalId)) : all
+  }
   async function repoRootOrThrow(root) {
     if (!(await repoRoots()).list.includes(root)) throw new Error('unknown repo')
     return root
@@ -144,24 +188,82 @@ export default async function activate(orca) {
   orca.panels.handle('task.get', async ({ root, id }) => {
     await repoRootOrThrow(root)
     const task = readTask(root, id)
-    const { pause, skipped } = planPause({ task, agents: liveAgents() })
+    const { pause, skipped } = planPause({ task, agents: await liveAgents() })
+    const feature = task.feature ? listFeatures(root).find((f) => f.id === task.feature) : null
+    let size = null
+    if (task.kind !== 'subtask') {
+      const profile = profileFor(root, task.profile)
+      const a = assess(task, profile)
+      size = {
+        profile: profile.name, agent: profile.agent, model: profile.model, effort: profile.effort,
+        verdict: a.verdict, estTokens: a.estTokens ?? null, ratio: a.ratio ?? null, range: a.range ?? null, advice: a.advice ?? null
+      }
+    }
+    const catalog = catalogFor(root)
     return {
       ...task,
+      assignees: catalog.map(({ key, source }) => ({ key, source })),
+      assigneeMissing: Boolean(task.assignee) && !catalog.some((e) => e.key === task.assignee),
+      featureTitle: feature?.title ?? null,
+      subtasks: listWork(root, { kind: 'subtask' }).filter((s) => s.parent === id).map(({ id: sid, status, title }) => ({ id: sid, status, title })),
+      size,
+      profiles: Object.keys(readConfig(root).sizing.profiles),
       working: pause.map((a) => ({ title: label(a) })),
       notInterruptible: skipped.map((s) => ({ title: label(s.agent), reason: s.reason }))
     }
   })
 
-  // Saves the edit, then (optionally) interrupts agents working on the task and asks them to re-check.
-  orca.panels.handle('task.update', async ({ root, id, title, body, status, baseHash, pause }) => {
+  orca.panels.handle('feature.get', async ({ root, id }) => {
     await repoRootOrThrow(root)
-    const { changed, hash } = editTask(root, id, { title, body, status, baseHash })
-    const result = { changed, hash, paused: [], skipped: [] }
+    const feature = readFeature(root, id)
+    const work = listWork(root)
+    const rollup = rollupFeature(feature, work, listArchived(root))
+    const children = work.filter((w) => w.feature === id).map(({ id: cid, kind, status, title }) => ({ id: cid, kind, status, title }))
+    return { ...rollup, body: feature.body, children }
+  })
+
+  orca.panels.handle('task.archive', async ({ root, id }) => {
+    await repoRootOrThrow(root)
+    const archived = archiveItem(root, id)
+    notify()
+    return { archived }
+  })
+
+  orca.panels.handle('archive.done', async ({ root }) => {
+    await repoRootOrThrow(root)
+    const result = archiveDone(root)
+    notify()
+    return result
+  })
+
+  // Starts an agent on the task with the model and effort of its profile. Needs the Orca CLI:
+  // the plugin API's agent.launch has no model or effort.
+  orca.panels.handle('task.run', async ({ root, id }) => {
+    await repoRootOrThrow(root)
+    const task = readTask(root, id)
+    if (task.kind === 'subtask') throw new Error('subtasks run inside their parent task')
+    if (task.status !== 'todo') throw new Error(`only a todo task can be run (${id} is ${task.status})`)
+    const finished = new Set([...listWork(root).filter((w) => w.status === 'done').map((w) => w.id), ...archivedIds(root)])
+    const waiting = (task.depends ?? []).filter((d) => !finished.has(d))
+    if (waiting.length > 0) throw new Error(`${id} waits for ${waiting.join(', ')}`)
+    const profile = profileFor(root, task.profile)
+    const prompt = runPrompt({ id, orbitCommand: ORBIT_COMMAND, assignee: task.assignee })
+    const out = await orcaRun(await cliPath(), [
+      'agent', 'launch', '--agent', profile.agent, '--model', profile.model, '--effort', profile.effort,
+      '--surface', 'terminal', '--worktree', 'active', '--prompt', prompt
+    ])
+    return { launched: true, terminal: out.result?.outcome?.handle ?? null, profile: profile.name }
+  })
+
+  // Saves the edit, then (optionally) interrupts agents working on the task and asks them to re-check.
+  orca.panels.handle('task.update', async ({ root, id, title, body, status, estTokens, profile, assignee, baseHash, pause }) => {
+    await repoRootOrThrow(root)
+    const { changed, hash, warning } = editTask(root, id, { title, body, status, estTokens, profile, assignee, baseHash })
+    const result = { changed, hash, warning, paused: [], skipped: [] }
     if (!pause || !(changed.title || changed.body)) return result
-    const plan = planPause({ task: readTask(root, id), agents: liveAgents() })
+    const plan = planPause({ task: readTask(root, id), agents: await liveAgents() })
     const skipped = plan.skipped.map((s) => ({ title: label(s.agent), reason: s.reason }))
-    const configured = await orca.settings.get('orcaCli')
-    const cli = configured || (existsSync(bundledCli) ? bundledCli : 'orca')
+    const cli = await cliPath()
     const message = taskEditedMessage(id, ORBIT_COMMAND)
 
     // Interrupt first, so the message lands in an idle prompt instead of queueing behind a running turn.
@@ -206,7 +308,7 @@ export default async function activate(orca) {
 
   // The panel follows the focused project: only its repo and the agents running inside it.
   orca.panels.handle('board.get', async () => {
-    const live = [...agents.values()].sort((a, b) => b.receivedAt - a.receivedAt)
+    const live = (await liveAgents()).sort((a, b) => b.receivedAt - a.receivedAt)
     const { workspaces } = await repoRoots()
     const focus = resolveFocus(await orca.host.call('workspace.readContext', {}), workspaces, {
       usesOrbit: safeUsesOrbit,
@@ -218,9 +320,20 @@ export default async function activate(orca) {
     const repos = []
     const taskOf = new Map()
     for (const root of shownRoots) {
-      const board = buildBoard(listTasks(root), shown)
+      const work = listWork(root)
+      const archived = listArchived(root)
+      const archivedBoardItems = archived.filter((a) => a.kind === 'task' || a.kind === 'bug')
+      // Subtasks live inside their task's session, so the board shows tasks and bugs only.
+      const board = buildBoard(work.filter((w) => w.kind !== 'subtask'), shown, { archived: archivedBoardItems })
       for (const a of board.agents) if (a.taskId) taskOf.set(a.paneKey, { taskId: a.taskId, repo: basename(root) })
-      repos.push({ root, name: basename(root), columns: board.columns, progress: board.progress })
+      repos.push({
+        root,
+        name: basename(root),
+        columns: board.columns,
+        progress: board.progress,
+        archivedCount: archivedBoardItems.length,
+        features: listFeatures(root).map((f) => rollupFeature(f, work, archived))
+      })
     }
     return {
       focus: focus.path ? 'project' : focus.ambiguous ? 'ambiguous' : focus.none ? 'none' : 'noFocus',

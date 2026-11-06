@@ -4,19 +4,27 @@ import { mkdtempSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defineCheck } from 'orca/testing'
-import { claim, newItem, setStatus } from '../lib/store.mjs'
+import { archiveItem, claim, newItem, setStatus } from '../lib/store.mjs'
 
 function fixtureRepo(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'orbit-check-')))
   const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' })
   git('init', '-q', '-b', 'main')
   git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
-  const a = newItem(dir, 'task', 'Write store', { plan: 'p-1', depends: [] })
-  const b = newItem(dir, 'task', 'Build panel', { plan: 'p-1', depends: [a.id] })
-  newItem(dir, 'task', 'Ship it', { plan: 'p-1', depends: [b.id] })
-  const c = newItem(dir, 'task', 'Review docs', { plan: 'p-1', depends: [] })
-  claim(dir, a.id, { owner: 'pane-1', workspace: dir })
-  setStatus(dir, c.id, 'review', 'needs eyes')
+  const f = newItem(dir, 'feature', 'Checkout').id
+  const a = newItem(dir, 'task', 'Write store', { feature: f, estTokens: '80000' }).id
+  const b = newItem(dir, 'task', 'Build panel', { feature: f, depends: [a], estTokens: '9000' }).id
+  newItem(dir, 'task', 'Ship it', { feature: f, depends: [b] })
+  const c = newItem(dir, 'task', 'Review docs', { feature: f }).id
+  const q = newItem(dir, 'task', 'Verify checkout flow', { feature: f }).id
+  newItem(dir, 'bug', 'Crash on submit', { feature: f, severity: 'high' })
+  newItem(dir, 'subtask', 'Validate email', { parent: a })
+  const shipped = newItem(dir, 'task', 'Already shipped', { feature: f }).id
+  claim(dir, a, { owner: 'pane-1', workspace: dir })
+  setStatus(dir, c, 'review', 'needs eyes')
+  setStatus(dir, q, 'qa')
+  setStatus(dir, shipped, 'done')
+  archiveItem(dir, shipped)
   return dir
 }
 

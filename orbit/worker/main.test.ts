@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
-import { claim, newItem } from '../lib/store.mjs'
+import { archiveItem, claim, newItem, setStatus } from '../lib/store.mjs'
 import * as main from './main.mjs'
 
 function repoWithClaimedTask(): { dir: string; id: string } {
@@ -158,7 +158,7 @@ test('same_named_workspaces_resolve_to_the_repo_that_uses_orbit', async () => {
   await worker.deactivate()
 })
 
-async function editHarness(agentState: string, settings: Record<string, string> = {}) {
+async function editHarness(agentState: string, settings: Record<string, string> = { orcaCli: fakeCli().path }) {
   const { dir, id } = repoWithClaimedTask() // task claimed by owner 'pane-1', status doing
   const host = mockHost({
     results: {
@@ -174,14 +174,20 @@ async function editHarness(agentState: string, settings: Record<string, string> 
   const opened = await worker.request('task.get', { root: dir, id })
   return { dir, id, worker, opened }
 }
-// A stand-in for the orca CLI: logs its arguments, answers like `terminal send --json`.
-function fakeCli(): { path: string; calls: () => string[][] } {
+// A stand-in for the orca CLI: logs its arguments, answers like `--json`. `terminal list` reports `live`
+// handles and is not logged, so call counts only cover what the plugin did to terminals and agents.
+function fakeCli(live: string[] = ['term-1']): { path: string; calls: () => string[][] } {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'orbit-cli-')))
   const log = join(dir, 'calls.jsonl')
   const path = join(dir, 'orca')
   writeFileSync(path, `#!/usr/bin/env node
-require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')
-console.log(JSON.stringify({ ok: true }))
+const args = process.argv.slice(2)
+if (args[0] === 'terminal' && args[1] === 'list') {
+  console.log(JSON.stringify({ ok: true, result: { terminals: ${JSON.stringify(live)}.map((handle) => ({ handle })), truncated: false } }))
+  process.exit(0)
+}
+require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n')
+console.log(JSON.stringify({ ok: true, result: { outcome: { handle: 'term-fake' } } }))
 `)
   chmodSync(path, 0o755)
   return { path, calls: () => { try { return readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) } catch { return [] } } }
@@ -286,4 +292,243 @@ test('task_update_reports_an_unreachable_terminal_instead_of_failing_the_save', 
   } finally {
     await worker.deactivate() // a failing assert must not leave fs watchers holding the process open
   }
+})
+
+function newRepo() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'orbit-m3-')))
+  const git = (...a: string[]) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' })
+  git('init', '-q', '-b', 'main')
+  git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+  return dir
+}
+const mk = (dir: string, kind: string, title: string, opts: Record<string, unknown> = {}) => newItem(dir, kind, title, opts).id
+async function m3Worker(dir: string, settings: Record<string, string> = {}) {
+  const host = mockHost({
+    results: {
+      'workspace.list': { workspaces: [entry(dir, 'proj')], truncated: false },
+      'workspace.readContext': { displayName: 'proj', branch: 'main', terminals: [] }
+    },
+    settings
+  })
+  return mountWorker(main, { host })
+}
+
+test('board_lists_tasks_and_bugs_with_qa_features_rollup_and_archived_progress', async () => {
+  const dir = newRepo()
+  const f = mk(dir, 'feature', 'Checkout')
+  const done = mk(dir, 'task', 'Shipped', { feature: f })
+  const inQa = mk(dir, 'task', 'In QA', { feature: f })
+  const bug = mk(dir, 'bug', 'Crash', { feature: f })
+  mk(dir, 'subtask', 'Child', { parent: inQa })
+  setStatus(dir, done, 'done')
+  archiveItem(dir, done)
+  setStatus(dir, inQa, 'qa')
+  const worker = await m3Worker(dir)
+  try {
+    const repo = (await worker.request('board.get', {})).repos[0]
+    assert.deepEqual(repo.columns.qa.map((t) => t.id), [inQa])
+    assert.deepEqual(repo.columns.todo.map((t) => [t.id, t.kind]), [[bug, 'bug']])
+    assert.equal(JSON.stringify(repo.columns).includes('s-1'), false, 'subtasks are not board items')
+    assert.deepEqual(repo.progress, { done: 1, total: 3, pct: 33 })
+    assert.equal(repo.archivedCount, 1)
+    assert.deepEqual(repo.features.map((x) => [x.id, x.total, x.done, x.status]), [[f, 3, 1, 'doing']])
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('task_get_adds_kind_subtasks_feature_size_and_the_profile_names', async () => {
+  const dir = newRepo()
+  const f = mk(dir, 'feature', 'Checkout')
+  const t = mk(dir, 'task', 'Build form', { feature: f, estTokens: '80000' })
+  const s = mk(dir, 'subtask', 'Validate', { parent: t })
+  const worker = await m3Worker(dir)
+  try {
+    const got = await worker.request('task.get', { root: dir, id: t })
+    assert.equal(got.kind, 'task')
+    assert.equal(got.featureTitle, 'Checkout')
+    assert.deepEqual(got.subtasks, [{ id: s, status: 'todo', title: 'Validate' }])
+    assert.deepEqual([got.size.profile, got.size.verdict, got.size.ratio], ['sonnet-medium', 'ok', 0.4])
+    assert.deepEqual(got.profiles, ['haiku-low', 'sonnet-medium', 'opus-high'])
+    assert.equal((await worker.request('task.get', { root: dir, id: s })).size, null, 'subtasks are not sized')
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('task_update_passes_size_fields_through_and_never_interrupts_for_them', async () => {
+  const dir = newRepo()
+  const t = mk(dir, 'task', 'T')
+  const worker = await m3Worker(dir)
+  try {
+    const got = await worker.request('task.get', { root: dir, id: t })
+    const r = await worker.request('task.update', { root: dir, id: t, estTokens: '30000', profile: 'haiku-low', baseHash: got.hash, pause: true })
+    assert.deepEqual([r.changed.fields, r.paused], [true, []])
+    assert.deepEqual((await worker.request('task.get', { root: dir, id: t })).size.profile, 'haiku-low')
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('archive_handlers_move_done_work_and_report_the_rest', async () => {
+  const dir = newRepo()
+  const a = mk(dir, 'task', 'Done one')
+  const b = mk(dir, 'task', 'Still open')
+  setStatus(dir, a, 'done')
+  const worker = await m3Worker(dir)
+  try {
+    await assert.rejects(worker.request('task.archive', { root: dir, id: b }), /only done items/)
+    assert.deepEqual((await worker.request('task.archive', { root: dir, id: a })).archived, [a])
+    const c = mk(dir, 'task', 'Done two')
+    setStatus(dir, c, 'done')
+    const all = await worker.request('archive.done', { root: dir })
+    assert.deepEqual([all.archived, all.skipped], [[c], []])
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('task_run_launches_an_agent_with_the_profile_model_and_effort', async () => {
+  const cli = fakeCli()
+  const dir = newRepo()
+  const t = mk(dir, 'task', 'Runnable', { profile: 'opus-high' })
+  const worker = await m3Worker(dir, { orcaCli: cli.path })
+  try {
+    const r = await worker.request('task.run', { root: dir, id: t })
+    assert.deepEqual([r.launched, r.terminal, r.profile], [true, 'term-fake', 'opus-high'])
+    const [args] = cli.calls()
+    assert.deepEqual(args.slice(0, 11), ['agent', 'launch', '--agent', 'claude', '--model', 'claude-opus-5-5', '--effort', 'high', '--surface', 'terminal', '--worktree'])
+    assert.equal(args[11], 'active')
+    const prompt = args[args.indexOf('--prompt') + 1]
+    assert.match(prompt, new RegExp(`brief ${t}`))
+    assert.match(prompt, new RegExp(`claim ${t}`))
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('task_run_refuses_what_is_not_ready', async () => {
+  const cli = fakeCli()
+  const dir = newRepo()
+  const dep = mk(dir, 'task', 'Dependency')
+  const waits = mk(dir, 'task', 'Waits', { depends: [dep] })
+  const busy = mk(dir, 'task', 'Busy')
+  setStatus(dir, busy, 'review')
+  const sub = mk(dir, 'subtask', 'Child', { parent: busy })
+  const worker = await m3Worker(dir, { orcaCli: cli.path })
+  try {
+    await assert.rejects(worker.request('task.run', { root: dir, id: waits }), new RegExp(`waits for ${dep}`))
+    await assert.rejects(worker.request('task.run', { root: dir, id: busy }), /only a todo task/)
+    await assert.rejects(worker.request('task.run', { root: dir, id: sub }), /subtasks run inside their parent/)
+    assert.deepEqual(cli.calls(), [])
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('feature_get_returns_the_rollup_children_and_body', async () => {
+  const dir = newRepo()
+  const f = mk(dir, 'feature', 'Checkout')
+  const t = mk(dir, 'task', 'Build form', { feature: f })
+  const b = mk(dir, 'bug', 'Crash', { feature: f })
+  setStatus(dir, t, 'done')
+  const worker = await m3Worker(dir)
+  try {
+    const got = await worker.request('feature.get', { root: dir, id: f })
+    assert.deepEqual([got.id, got.title, got.total, got.done, got.openBugs], [f, 'Checkout', 2, 1, 1])
+    assert.deepEqual(got.children.map((c) => [c.id, c.kind, c.status]), [[t, 'task', 'done'], [b, 'bug', 'todo']])
+    assert.match(got.body, /## Acceptance/)
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('agents_whose_terminal_is_gone_are_dropped_but_a_missing_cli_prunes_nothing', async () => {
+  const dir = newRepo()
+  mk(dir, 'task', 'T')
+  const status = (key: string, terminal: string) => ({ workspaceId: `u::${dir}`, paneKey: key, terminalId: terminal, title: key, state: 'working', receivedAt: 1 })
+  const run = async (orcaCli: string) => {
+    const worker = await m3Worker(dir, { orcaCli })
+    try {
+      await worker.emit('agent.status.changed', status('alive', 'term-live'))
+      await worker.emit('agent.status.changed', status('closed', 'term-gone'))
+      const board = await worker.request('board.get', {})
+      return [board.agents.map((a) => a.paneKey).sort(), board.agentCounts.working]
+    } finally {
+      await worker.deactivate()
+    }
+  }
+  assert.deepEqual(await run(fakeCli(['term-live']).path), [['alive'], 1])
+  assert.deepEqual(await run('/nonexistent/orca'), [['alive', 'closed'], 2], 'when the CLI cannot answer, show what we know')
+})
+
+// Agents and skills come from a fake home (ORBIT_HOME), never the machine's real one.
+async function withHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'orbit-home-')))
+  for (const name of ['swift-expert', 'android-expert']) {
+    mkdirSync(join(home, '.claude', 'agents'), { recursive: true })
+    writeFileSync(join(home, '.claude', 'agents', `${name}.md`), `---\nname: ${name}\n---\n`)
+  }
+  mkdirSync(join(home, '.claude', 'skills', 'design-review'), { recursive: true })
+  writeFileSync(join(home, '.claude', 'skills', 'design-review', 'SKILL.md'), '---\nname: design-review\n---\n')
+  const before = process.env.ORBIT_HOME
+  process.env.ORBIT_HOME = home
+  try {
+    return await fn(home)
+  } finally {
+    if (before === undefined) delete process.env.ORBIT_HOME
+    else process.env.ORBIT_HOME = before
+  }
+}
+
+test('task_get_lists_the_assignee_catalog_and_flags_an_assignee_that_disappeared', async () => {
+  await withHome(async (home) => {
+    const dir = newRepo()
+    const t = mk(dir, 'task', 'Assigned', { assignee: 'swift-expert' })
+    const worker = await m3Worker(dir)
+    try {
+      const got = await worker.request('task.get', { root: dir, id: t })
+      assert.equal(got.assignee, 'agent:swift-expert')
+      assert.equal(got.assigneeMissing, false)
+      assert.deepEqual(got.assignees.map((a) => a.key), ['agent:android-expert', 'agent:swift-expert', 'skill:design-review'])
+      assert.equal(got.assignees[0].source, 'user')
+      rmSync(join(home, '.claude', 'agents', 'swift-expert.md'))
+      assert.equal((await worker.request('task.get', { root: dir, id: t })).assigneeMissing, true)
+    } finally {
+      await worker.deactivate()
+    }
+  })
+})
+
+test('task_update_sets_and_clears_the_assignee_without_interrupting_anyone', async () => {
+  await withHome(async () => {
+    const dir = newRepo()
+    const t = mk(dir, 'task', 'T')
+    const worker = await m3Worker(dir)
+    try {
+      const got = await worker.request('task.get', { root: dir, id: t })
+      const r = await worker.request('task.update', { root: dir, id: t, assignee: 'agent:android-expert', baseHash: got.hash, pause: true })
+      assert.deepEqual([r.changed.fields, r.paused], [true, []])
+      assert.equal((await worker.request('task.get', { root: dir, id: t })).assignee, 'agent:android-expert')
+      await assert.rejects(worker.request('task.update', { root: dir, id: t, assignee: 'nobody', baseHash: (await worker.request('task.get', { root: dir, id: t })).hash, pause: false }), /unknown assignee/)
+    } finally {
+      await worker.deactivate()
+    }
+  })
+})
+
+test('task_run_asks_the_session_to_use_the_assignee', async () => {
+  await withHome(async () => {
+    const cli = fakeCli()
+    const dir = newRepo()
+    const t = mk(dir, 'task', 'Runnable', { assignee: 'swift-expert' })
+    const worker = await m3Worker(dir, { orcaCli: cli.path })
+    try {
+      await worker.request('task.run', { root: dir, id: t })
+      const [args] = cli.calls()
+      assert.match(args[args.indexOf('--prompt') + 1], /subagent_type "swift-expert"/)
+    } finally {
+      await worker.deactivate()
+    }
+  })
 })

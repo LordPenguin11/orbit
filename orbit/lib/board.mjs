@@ -15,8 +15,9 @@ export function agentsForTask(task, agents) {
   return here.length === 1 ? here : []
 }
 
-export function buildBoard(tasks, agents) {
-  const doneIds = new Set(tasks.filter((t) => t.status === 'done').map((t) => t.id))
+export function buildBoard(tasks, agents, { archived = [] } = {}) {
+  // Archived work is done work: it unblocks dependents and keeps counting toward progress.
+  const doneIds = new Set([...tasks.filter((t) => t.status === 'done'), ...archived].map((t) => t.id))
   const columns = Object.fromEntries(STATUSES.map((s) => [s, []]))
   const taskOf = new Map()
 
@@ -34,13 +35,13 @@ export function buildBoard(tasks, agents) {
     })
   }
 
-  const done = columns.done.length
+  const done = columns.done.length + archived.length
   const agentCounts = { total: agents.length, ...Object.fromEntries(AGENT_STATES.map((s) => [s, 0])) }
   for (const a of agents) if (a.state in agentCounts) agentCounts[a.state]++
 
   return {
     columns,
-    progress: { done, total: tasks.length, pct: tasks.length ? Math.round((done / tasks.length) * 100) : 0 },
+    progress: { done, total: tasks.length + archived.length, pct: tasks.length + archived.length ? Math.round((done / (tasks.length + archived.length)) * 100) : 0 },
     agents: agents.map((a) => ({ ...a, taskId: taskOf.get(a.paneKey) })),
     agentCounts
   }

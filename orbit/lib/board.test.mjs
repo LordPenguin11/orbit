@@ -8,7 +8,7 @@ test('groups_by_status', () => {
   const b = buildBoard([t('t-1', 'todo'), t('t-2', 'doing'), t('t-3', 'done')], [])
   assert.deepEqual(
     Object.fromEntries(Object.entries(b.columns).map(([k, v]) => [k, v.map((x) => x.id)])),
-    { todo: ['t-1'], doing: ['t-2'], review: [], done: ['t-3'], blocked: [] }
+    { todo: ['t-1'], doing: ['t-2'], review: [], qa: [], done: ['t-3'], blocked: [] }
   )
 })
 
@@ -70,4 +70,15 @@ test('workspace_fallback_applies_only_when_exactly_one_agent_is_there', () => {
   const two = [{ paneKey: 'p1', workspaceId: 'w1' }, { paneKey: 'p3', workspaceId: 'w1' }]
   assert.deepEqual(agentsForTask(task, two), [])
   assert.deepEqual(agentsForTask({ owner: 'x' }, one), [])
+})
+
+test('a_dependency_on_an_archived_task_is_not_blocking_and_progress_keeps_archived_work', () => {
+  const b = buildBoard(
+    [t('t-5', 'todo', { depends: ['t-1'] }), t('t-6', 'doing')],
+    [],
+    { archived: [{ id: 't-1' }, { id: 't-2' }] }
+  )
+  assert.deepEqual(b.columns.todo.map((x) => x.id), ['t-5'])
+  assert.deepEqual(b.columns.blocked, [])
+  assert.deepEqual(b.progress, { done: 2, total: 4, pct: 50 })
 })
