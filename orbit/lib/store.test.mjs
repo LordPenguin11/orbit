@@ -1,18 +1,21 @@
 import assert from 'node:assert/strict'
 import { execFile, execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   claim,
   commonDir,
+  editTask,
   findPrimaryRoot,
   listTasks,
   migrate,
   newItem,
   parseFrontmatter,
-  setStatus
+  readTask,
+  setStatus,
+  taskDiff
 } from './store.mjs'
 
 function tempRepo() {
@@ -179,4 +182,69 @@ test('migrate_fills_fields_missing_from_existing_state_without_overriding_it', (
   migrate(dir)
   const t = only(dir, 't-1')
   assert.deepEqual([t.status, t.note, t.owner, t.workspace], ['review', 'newer note', 'pane-9', '/w'])
+})
+
+test('read_task_returns_fields_body_and_a_content_hash', () => {
+  const { dir } = tempRepo()
+  const id = task(dir, 'Readable')
+  const t = readTask(dir, id)
+  assert.equal(t.title, 'Readable')
+  assert.equal(t.status, 'todo')
+  assert.match(t.body, /## Goal/)
+  assert.match(t.hash, /^[0-9a-f]{40}$/)
+})
+
+test('edit_task_updates_title_and_body_and_snapshots_the_previous_version', () => {
+  const { dir } = tempRepo()
+  const id = task(dir, 'Old title')
+  const before = readTask(dir, id)
+  const r = editTask(dir, id, { title: 'New title', body: '\n## Goal\n\nNew goal\n', baseHash: before.hash })
+  assert.deepEqual(r.changed, { title: true, body: true, status: false })
+  const after = readTask(dir, id)
+  assert.equal(after.title, 'New title')
+  assert.match(after.body, /New goal/)
+  assert.equal(after.hash, r.hash)
+  assert.notEqual(after.hash, before.hash)
+  assert.match(taskDiff(dir, id), /-title: Old title[\s\S]*\+title: New title/)
+})
+
+test('edit_task_rejects_a_stale_base_hash_without_writing', () => {
+  const { dir } = tempRepo()
+  const id = task(dir, 'Original')
+  const opened = readTask(dir, id)
+  editTask(dir, id, { title: 'Agent edit', body: opened.body, baseHash: opened.hash })
+  assert.throws(
+    () => editTask(dir, id, { title: 'Stale edit', body: opened.body, baseHash: opened.hash }),
+    (e) => e.code === 'conflict'
+  )
+  assert.equal(readTask(dir, id).title, 'Agent edit')
+})
+
+test('edit_task_status_goes_through_shared_state_and_needs_no_revision', () => {
+  const { dir } = tempRepo()
+  const id = task(dir)
+  const t = readTask(dir, id)
+  const r = editTask(dir, id, { title: t.title, body: t.body, status: 'review', baseHash: t.hash })
+  assert.deepEqual(r.changed, { title: false, body: false, status: true })
+  assert.equal(only(dir, id).status, 'review')
+  assert.match(taskDiff(dir, id), /no earlier revision/i)
+})
+
+test('edit_task_done_status_is_recorded_in_the_definition_too', () => {
+  const { dir } = tempRepo()
+  const id = task(dir)
+  const t = readTask(dir, id)
+  editTask(dir, id, { title: t.title, body: t.body, status: 'done', baseHash: t.hash })
+  assert.match(readFileSync(join(dir, '.orbit', 'tasks', `${id}.md`), 'utf8'), /^status: done$/m)
+})
+
+test('no_op_edit_does_not_create_a_revision', () => {
+  const { dir } = tempRepo()
+  const id = task(dir)
+  const t = readTask(dir, id)
+  editTask(dir, id, { title: 'Changed', body: t.body, baseHash: t.hash })
+  const t2 = readTask(dir, id)
+  const r = editTask(dir, id, { title: 'Changed', body: t2.body, baseHash: t2.hash })
+  assert.deepEqual(r.changed, { title: false, body: false, status: false })
+  assert.equal(readdirSync(join(commonDir(dir), 'orbit', 'revisions', id)).length, 1)
 })

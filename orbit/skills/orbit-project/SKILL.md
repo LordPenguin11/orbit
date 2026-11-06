@@ -45,6 +45,12 @@ Never edit task frontmatter by hand: use the commands, they write atomically.
 4. Hand off: `ORBIT task status <task-id> review`. Finished and verified: `done`.
    Stuck on something outside the task: `ORBIT task status <task-id> blocked --note "<why>"`.
 
+## When a task is edited under you
+
+If you are told a task was edited (the Orbit board saves user edits and may interrupt you), run
+`ORBIT task diff <task-id>` to see the old and new definition, compare it with what you already did,
+say what changes, and only then continue. Do not assume the old text still applies.
+
 ## Report progress
 
 `ORBIT task list` prints each task with status, owner and workspace. `ORBIT task list --json`

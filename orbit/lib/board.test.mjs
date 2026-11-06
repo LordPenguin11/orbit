@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildBoard } from './board.mjs'
+import { agentsForTask, buildBoard } from './board.mjs'
 
 const t = (id, status, extra = {}) => ({ id, title: id, status, owner: '', depends: [], ...extra })
 
@@ -52,4 +52,22 @@ test('agents_report_task_and_counts', () => {
   const b = buildBoard([t('t-1', 'doing', { owner: 'pane-a' })], agents)
   assert.deepEqual(b.agents.map((a) => [a.paneKey, a.taskId ?? null]), [['pane-a', 't-1'], ['pane-b', null], ['pane-c', null]])
   assert.deepEqual(b.agentCounts, { total: 3, working: 1, blocked: 1, waiting: 0, done: 1 })
+})
+
+test('agents_for_task_prefers_the_owner_and_ignores_other_agents_in_the_workspace', () => {
+  const task = { owner: 'pane-a', worktree: 'w1' }
+  const agents = [
+    { paneKey: 'pane-a', workspaceId: 'w2' },
+    { paneKey: 'pane-me', workspaceId: 'w1' }
+  ]
+  assert.deepEqual(agentsForTask(task, agents).map((a) => a.paneKey), ['pane-a'])
+})
+
+test('workspace_fallback_applies_only_when_exactly_one_agent_is_there', () => {
+  const task = { owner: 'custom-name', worktree: 'w1' }
+  const one = [{ paneKey: 'p1', workspaceId: 'w1' }, { paneKey: 'p2', workspaceId: 'w9' }]
+  assert.deepEqual(agentsForTask(task, one).map((a) => a.paneKey), ['p1'])
+  const two = [{ paneKey: 'p1', workspaceId: 'w1' }, { paneKey: 'p3', workspaceId: 'w1' }]
+  assert.deepEqual(agentsForTask(task, two), [])
+  assert.deepEqual(agentsForTask({ owner: 'x' }, one), [])
 })

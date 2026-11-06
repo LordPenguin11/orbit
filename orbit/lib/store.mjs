@@ -4,6 +4,7 @@
 //    never checked out, so a branch switch cannot touch it. Status changes also append to events.jsonl.
 // Every function takes `cwd`: any path inside the repo or one of its worktrees.
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   appendFileSync,
   existsSync,
@@ -26,6 +27,7 @@ const TEMPLATES = new URL('../skills/orbit-project/templates/', import.meta.url)
 
 const oneLine = (v) => String(v ?? '').replace(/\s*\n\s*/g, ' ').trim()
 const today = () => new Date().toISOString().slice(0, 10)
+const sha1 = (text) => createHash('sha1').update(text).digest('hex')
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
 export function parseFrontmatter(text) {
@@ -250,4 +252,77 @@ export function migrate(cwd) {
     changed++
   }
   return changed
+}
+
+/** One task for the detail view: definition fields + shared state + body, and a hash to detect concurrent edits. */
+export function readTask(cwd, id) {
+  const text = readFileSync(definitionOf(cwd, id), 'utf8')
+  const { data, body } = parseFrontmatter(text)
+  const merged = { ...data, ...readState(cwd, id) }
+  return { ...merged, status: merged.status || 'todo', body, hash: sha1(text) }
+}
+
+const revisionsDir = (cwd, id) => join(stateRoot(cwd), 'revisions', id)
+
+/**
+ * Edit title/body (definition, in git) and status (shared state). `baseHash` is the hash the editor
+ * opened; a different current hash means someone else edited meanwhile and nothing is written.
+ * The previous definition is kept in revisions/ so agents can diff against it.
+ */
+export function editTask(cwd, id, { title, body, status, baseHash }) {
+  if (status !== undefined && !STATUSES.includes(status)) {
+    throw new Error(`bad status "${status}", use one of: ${STATUSES.join(', ')}`)
+  }
+  const file = definitionOf(cwd, id)
+  const changed = { title: false, body: false, status: false }
+  let currentStatus
+  withLock(file, () => {
+    const text = readFileSync(file, 'utf8')
+    if (sha1(text) !== baseHash) {
+      throw Object.assign(new Error(`task ${id} changed since you opened it`), { code: 'conflict' })
+    }
+    const { data, body: oldBody } = parseFrontmatter(text)
+    const nextTitle = title === undefined ? data.title : oneLine(title)
+    const nextBody = body === undefined ? oldBody : body
+    changed.title = nextTitle !== data.title
+    changed.body = nextBody !== oldBody
+    currentStatus = readState(cwd, id).status || data.status || 'todo'
+    if (changed.title || changed.body) {
+      const dir = revisionsDir(cwd, id)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, `${Date.now()}-${process.hrtime.bigint() % 1000000n}.md`), text, { flag: 'wx' })
+      atomicWrite(file, serialize({ ...data, title: nextTitle }, nextBody))
+    }
+  })
+  if (status !== undefined && status !== currentStatus) {
+    setStatus(cwd, id, status) // outside the definition lock: done also rewrites the definition
+    changed.status = true
+  }
+  if (changed.title || changed.body || changed.status) {
+    mkdirSync(stateRoot(cwd), { recursive: true })
+    appendFileSync(
+      join(stateRoot(cwd), 'events.jsonl'),
+      `${JSON.stringify({ ts: new Date().toISOString(), id, event: 'edited', changed })}\n`
+    )
+  }
+  return { changed, hash: sha1(readFileSync(file, 'utf8')) }
+}
+
+/** Unified diff between the newest earlier revision of a task definition and the current one. */
+export function taskDiff(cwd, id) {
+  const file = definitionOf(cwd, id)
+  let revisions
+  try {
+    revisions = readdirSync(revisionsDir(cwd, id)).sort()
+  } catch {
+    revisions = []
+  }
+  if (revisions.length === 0) return `${id}: no earlier revision`
+  try {
+    execFileSync('git', ['diff', '--no-index', '--no-color', '--', join(revisionsDir(cwd, id), revisions.at(-1)), file], { encoding: 'utf8' })
+    return `${id}: no difference from the latest revision`
+  } catch (e) {
+    if (e.status === 1) return e.stdout // git diff exits 1 when files differ
+    throw e
+  }
 }

@@ -1,13 +1,16 @@
 // Worker: reads .orbit/ of every repo Orca knows, tracks live agents from events, serves the panel.
-import { mkdirSync, watch } from 'node:fs'
-import { basename, join } from 'node:path'
+import { execFile } from 'node:child_process'
+import { existsSync, mkdirSync, watch } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildBoard } from '../lib/board.mjs'
 import { agentsInRepo, resolveFocus } from '../lib/focus.mjs'
+import { planPause, taskEditedMessage } from '../lib/pause.mjs'
 import { appendReminder, decideTool, isGuardedTool, workspacePathOf } from '../lib/guard.mjs'
-import { findPrimaryRoot, listTasks, stateRoot, usesOrbit, worktreePaths } from '../lib/store.mjs'
+import { editTask, findPrimaryRoot, listTasks, readTask, stateRoot, usesOrbit, worktreePaths } from '../lib/store.mjs'
 
 const ROOTS_TTL_MS = 5_000
+const INTERRUPT_GAP_MS = 300 // let the agent's prompt settle after the interrupt before the message is typed
 const DONE_AGENT_TTL_MS = 6 * 60 * 60 * 1000
 const ORBIT_COMMAND = `node ${fileURLToPath(new URL('../skills/orbit-project/scripts/orbit.mjs', import.meta.url))}`
 
@@ -18,6 +21,23 @@ export function deactivate() {
   clearTimeout(timer)
   for (const w of watchers.values()) w.close()
   watchers.clear()
+}
+
+// The plugin API cannot interrupt an agent (ESC through terminal.sendText does nothing to Claude Code),
+// but `orca terminal send --interrupt` does, and it also reaches terminals outside the focused worktree.
+const bundledCli = join(dirname(process.execPath), '..', 'Resources', 'bin', 'orca') // macOS app layout
+
+function orcaTerminalSend(cli, terminalId, ...flags) {
+  return new Promise((resolve, reject) => {
+    execFile(cli, ['terminal', 'send', '--terminal', terminalId, ...flags, '--json'], { timeout: 8_000 }, (error, stdout) => {
+      if (error) return reject(error)
+      try {
+        return JSON.parse(stdout.slice(stdout.indexOf('{'))).ok ? resolve() : reject(new Error('the Orca CLI refused'))
+      } catch {
+        return reject(new Error('unreadable Orca CLI output'))
+      }
+    })
+  })
 }
 
 /** @type {import('orca/worker').Activate} */
@@ -112,6 +132,68 @@ export default async function activate(orca) {
     if (e.inputKind === 'driving' || (await orca.settings.get('guardMode')) === 'off') return
     if ((await repoRoots()).list.length === 0) return // no repo uses Orbit
     return next({ ...e, prompt: appendReminder(e.prompt) })
+  })
+
+  const label = (a) => a.title ?? a.paneKey
+  const liveAgents = () => [...agents.values()]
+  async function repoRootOrThrow(root) {
+    if (!(await repoRoots()).list.includes(root)) throw new Error('unknown repo')
+    return root
+  }
+
+  orca.panels.handle('task.get', async ({ root, id }) => {
+    await repoRootOrThrow(root)
+    const task = readTask(root, id)
+    const { pause, skipped } = planPause({ task, agents: liveAgents() })
+    return {
+      ...task,
+      working: pause.map((a) => ({ title: label(a) })),
+      notInterruptible: skipped.map((s) => ({ title: label(s.agent), reason: s.reason }))
+    }
+  })
+
+  // Saves the edit, then (optionally) interrupts agents working on the task and asks them to re-check.
+  orca.panels.handle('task.update', async ({ root, id, title, body, status, baseHash, pause }) => {
+    await repoRootOrThrow(root)
+    const { changed, hash } = editTask(root, id, { title, body, status, baseHash })
+    const result = { changed, hash, paused: [], skipped: [] }
+    if (!pause || !(changed.title || changed.body)) return result
+    const plan = planPause({ task: readTask(root, id), agents: liveAgents() })
+    const skipped = plan.skipped.map((s) => ({ title: label(s.agent), reason: s.reason }))
+    const configured = await orca.settings.get('orcaCli')
+    const cli = configured || (existsSync(bundledCli) ? bundledCli : 'orca')
+    const message = taskEditedMessage(id, ORBIT_COMMAND)
+
+    // Interrupt first, so the message lands in an idle prompt instead of queueing behind a running turn.
+    const interruptFailure = new Map()
+    for (const a of plan.pause) {
+      try {
+        await orcaTerminalSend(cli, a.terminalId, '--interrupt')
+      } catch (error) {
+        interruptFailure.set(a.terminalId, error.message)
+      }
+    }
+    if (interruptFailure.size < plan.pause.length) await new Promise((r) => setTimeout(r, INTERRUPT_GAP_MS))
+
+    const paused = []
+    for (const a of plan.pause) {
+      const whyNotInterrupted = interruptFailure.get(a.terminalId)
+      try {
+        if (whyNotInterrupted) {
+          // No CLI: the message still goes through the plugin API (focused worktree only) and queues.
+          await orca.host.call('terminal.sendText', { terminalId: a.terminalId, text: message, enter: true })
+        } else {
+          await orcaTerminalSend(cli, a.terminalId, '--text', message, '--enter')
+        }
+        if (whyNotInterrupted) skipped.push({ title: label(a), reason: `could not interrupt (${whyNotInterrupted}); the message was queued` })
+        else paused.push(label(a))
+      } catch (error) {
+        const reasons = [whyNotInterrupted && `could not interrupt (${whyNotInterrupted})`, `could not reach its terminal (${error.message})`]
+        skipped.push({ title: label(a), reason: reasons.filter(Boolean).join('; ') })
+      }
+    }
+    notify()
+    return { ...result, paused, skipped }
   })
 
   const safeUsesOrbit = (path) => {

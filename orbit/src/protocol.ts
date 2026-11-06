@@ -11,6 +11,21 @@ export interface BoardTask {
   waitingOn?: string[]
   agent?: { state: AgentState; title: string | null }
 }
+export interface TaskDetail {
+  id: string
+  title: string
+  status: Status
+  plan?: string
+  created?: string
+  completed?: string
+  depends: string[]
+  note?: string
+  body: string
+  /** Hash of the definition when opened; sent back so a concurrent edit is detected, not overwritten. */
+  hash: string
+  working: { title: string }[]
+  notInterruptible: { title: string; reason: string }[]
+}
 export interface BoardAgent {
   paneKey: string
   title: string | null
@@ -36,6 +51,16 @@ declare module 'orca' {
   // oxlint-disable-next-line typescript/consistent-type-definitions -- declaration merging needs an interface
   interface PluginRequests {
     'board.get': { input: Record<string, never>; output: BoardData }
+    'task.get': { input: { root: string; id: string }; output: TaskDetail }
+    'task.update': {
+      input: { root: string; id: string; title: string; body: string; status: Status; baseHash: string; pause: boolean }
+      output: {
+        changed: { title: boolean; body: boolean; status: boolean }
+        hash: string
+        paused: string[]
+        skipped: { title: string; reason: string }[]
+      }
+    }
   }
   // oxlint-disable-next-line typescript/consistent-type-definitions -- declaration merging needs an interface
   interface PluginPanelEvents {

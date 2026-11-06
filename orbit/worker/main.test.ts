@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, realpathSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { assert, mockHost, mountWorker, test } from 'orca/testing'
+import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import { claim, newItem } from '../lib/store.mjs'
 import * as main from './main.mjs'
 
@@ -156,4 +156,134 @@ test('same_named_workspaces_resolve_to_the_repo_that_uses_orbit', async () => {
   const board = await worker.request('board.get', {})
   assert.deepEqual([board.focus, board.repos.map((r) => r.root)], ['project', [a]])
   await worker.deactivate()
+})
+
+async function editHarness(agentState: string, settings: Record<string, string> = {}) {
+  const { dir, id } = repoWithClaimedTask() // task claimed by owner 'pane-1', status doing
+  const host = mockHost({
+    results: {
+      'workspace.list': { workspaces: [entry(dir, 'proj')], truncated: false },
+      'terminal.sendText': { accepted: true }
+    },
+    settings
+  })
+  const worker = await mountWorker(main, { host })
+  await worker.emit('agent.status.changed', {
+    workspaceId: `u::${dir}`, paneKey: 'pane-1', terminalId: 'term-1', title: 'Claude', state: agentState, receivedAt: 1
+  })
+  const opened = await worker.request('task.get', { root: dir, id })
+  return { dir, id, worker, opened }
+}
+// A stand-in for the orca CLI: logs its arguments, answers like `terminal send --json`.
+function fakeCli(): { path: string; calls: () => string[][] } {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'orbit-cli-')))
+  const log = join(dir, 'calls.jsonl')
+  const path = join(dir, 'orca')
+  writeFileSync(path, `#!/usr/bin/env node
+require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')
+console.log(JSON.stringify({ ok: true }))
+`)
+  chmodSync(path, 0o755)
+  return { path, calls: () => { try { return readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) } catch { return [] } } }
+}
+const sent = (worker: Awaited<ReturnType<typeof mountWorker>>) =>
+  worker.host.callsOf('terminal.sendText').map((c) => JSON.stringify(c))
+
+test('task_get_returns_the_detail_and_who_is_working_on_it', async () => {
+  const { id, worker, opened } = await editHarness('working')
+  assert.equal(opened.id, id)
+  assert.match(opened.body, /## Goal/)
+  assert.deepEqual(opened.working.map((a) => a.title), ['Claude'])
+  await worker.deactivate()
+})
+
+test('task_update_interrupts_through_the_orca_cli_then_types_the_diff_message', async () => {
+  const cli = fakeCli()
+  const { dir, id, worker, opened } = await editHarness('working', { orcaCli: cli.path })
+  try {
+    const r = await worker.request('task.update', {
+      root: dir, id, title: 'Edited title', body: opened.body, baseHash: opened.hash, pause: true
+    })
+    assert.equal(r.changed.title, true)
+    assert.deepEqual(r.paused, ['Claude'])
+    assert.deepEqual(r.skipped, [])
+    const calls = cli.calls()
+    assert.equal(calls.length, 2)
+    assert.deepEqual(calls[0].slice(0, 5), ['terminal', 'send', '--terminal', 'term-1', '--interrupt'])
+    assert.deepEqual(calls[1].slice(0, 4), ['terminal', 'send', '--terminal', 'term-1'])
+    assert.ok(calls[1].includes('--enter'))
+    assert.match(calls[1][calls[1].indexOf('--text') + 1], new RegExp(`task diff ${id}`))
+    assert.deepEqual(sent(worker), [], 'the CLI path does not use terminal.sendText')
+    assert.deepEqual(worker.refusals, [])
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('task_update_falls_back_to_a_queued_message_when_the_cli_cannot_run', async () => {
+  const { dir, id, worker, opened } = await editHarness('working', { orcaCli: '/nonexistent/orca' })
+  try {
+    const r = await worker.request('task.update', {
+      root: dir, id, title: 'Edited', body: opened.body, baseHash: opened.hash, pause: true
+    })
+    assert.deepEqual(r.paused, [])
+    assert.match(r.skipped[0].reason, /could not interrupt/)
+    const calls = sent(worker)
+    assert.equal(calls.length, 1, 'only the message, no ESC')
+    assert.match(calls[0], new RegExp(`task diff ${id}`))
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('task_update_does_not_touch_terminals_when_pause_is_off_or_only_status_changed', async () => {
+  const { dir, id, worker, opened } = await editHarness('working')
+  await worker.request('task.update', { root: dir, id, title: 'Quiet edit', body: opened.body, baseHash: opened.hash, pause: false })
+  const reopened = await worker.request('task.get', { root: dir, id })
+  await worker.request('task.update', { root: dir, id, status: 'review', title: reopened.title, body: reopened.body, baseHash: reopened.hash, pause: true })
+  assert.deepEqual(sent(worker), [])
+  await worker.deactivate()
+})
+
+test('task_update_skips_an_agent_that_is_waiting_and_reports_why', async () => {
+  const { dir, id, worker, opened } = await editHarness('waiting')
+  const r = await worker.request('task.update', { root: dir, id, title: 'Edit', body: opened.body, baseHash: opened.hash, pause: true })
+  assert.deepEqual(sent(worker), [])
+  assert.match(r.skipped[0].reason, /waiting/)
+  await worker.deactivate()
+})
+
+test('task_update_rejects_a_stale_hash_and_unknown_repos', async () => {
+  const { dir, id, worker, opened } = await editHarness('working')
+  await worker.request('task.update', { root: dir, id, title: 'First', body: opened.body, baseHash: opened.hash, pause: false })
+  await assert.rejects(worker.request('task.update', { root: dir, id, title: 'Stale', body: opened.body, baseHash: opened.hash, pause: false }), /changed since/)
+  await assert.rejects(worker.request('task.get', { root: '/not/a/known/repo', id }), /unknown repo/)
+  await worker.deactivate()
+})
+
+test('task_update_reports_an_unreachable_terminal_instead_of_failing_the_save', async () => {
+  const { dir, id } = repoWithClaimedTask()
+  const host = mockHost({
+    results: {
+      'workspace.list': { workspaces: [entry(dir, 'proj')], truncated: false },
+      'terminal.sendText': () => {
+        throw hostError('not_permitted', 'terminal is outside the active worktree')
+      }
+    },
+    settings: { orcaCli: '/nonexistent/orca' }
+  })
+  const worker = await mountWorker(main, { host })
+  await worker.emit('agent.status.changed', {
+    workspaceId: `u::${dir}`, paneKey: 'pane-1', terminalId: 'term-1', title: 'Claude', state: 'working', receivedAt: 1
+  })
+  try {
+    const opened = await worker.request('task.get', { root: dir, id })
+    const r = await worker.request('task.update', { root: dir, id, title: 'Saved anyway', body: opened.body, baseHash: opened.hash, pause: true })
+    assert.equal(r.changed.title, true)
+    assert.deepEqual(r.paused, [])
+    assert.match(r.skipped[0].reason, /outside the active worktree/)
+    assert.equal((await worker.request('task.get', { root: dir, id })).title, 'Saved anyway')
+  } finally {
+    await worker.deactivate() // a failing assert must not leave fs watchers holding the process open
+  }
 })

@@ -3,7 +3,7 @@
   "execution": "trusted-worker",
   "id": "orbit-projects",
   "name": "Orbit Projects",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Kanban board of the repo's .orbit tasks with the agents working on them.",
   "engines": {
     "orca": ">=1.4.248"
@@ -50,6 +50,13 @@
           "Off"
         ],
         "default": "block"
+      },
+      {
+        "key": "orcaCli",
+        "title": "Orca CLI path",
+        "description": "Used to interrupt agents when you save a task they are working on. Leave empty to find it automatically.",
+        "type": "string",
+        "default": ""
       }
     ]
   },
@@ -65,6 +72,9 @@
     },
     {
       "kind": "settings:own"
+    },
+    {
+      "kind": "terminal:send"
     }
   ]
 }

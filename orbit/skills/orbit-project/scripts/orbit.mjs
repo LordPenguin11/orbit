@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { claim, listTasks, migrate, newItem, setStatus } from '../../../lib/store.mjs'
+import { claim, listTasks, migrate, newItem, setStatus, taskDiff } from '../../../lib/store.mjs'
 
 const { positionals, flags } = (() => {
   const positionals = []
@@ -54,12 +54,14 @@ try {
       const status = rest[1] ?? fail('status needs a value')
       setStatus(cwd, id, status, note)
       console.log(`${id} ${status}`)
+    } else if (cmd === 'task' && sub === 'diff') {
+      console.log(taskDiff(cwd, rest[0] ?? fail('diff needs a task id')))
     } else if (cmd === 'task' && sub === 'list') {
       const tasks = listTasks(cwd, { status: typeof flags.status === 'string' ? flags.status : undefined })
       if (flags.json) console.log(JSON.stringify(tasks, null, 2))
       else for (const t of tasks) console.log(`${t.id}\t${t.status}\t${t.owner || '-'}\t${t.title}`)
     } else fail(`unknown: ${cmd} ${sub ?? ''}`)
-  } else fail('commands: init | migrate | plan new | doc new | task new|claim|status|list')
+  } else fail('commands: init | migrate | plan new | doc new | task new|claim|status|diff|list')
 } catch (e) {
   fail(e.message)
 }
