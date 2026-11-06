@@ -20,6 +20,8 @@ export interface BoardAgent {
   repo?: string
 }
 export interface BoardData {
+  /** project: the focused repo; ambiguous: several repos could match; none: it does not use Orbit; noFocus: nothing focused. */
+  focus: 'project' | 'ambiguous' | 'none' | 'noFocus'
   repos: {
     root: string
     name: string

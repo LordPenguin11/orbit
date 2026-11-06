@@ -7,6 +7,7 @@ import {
   Heading,
   List,
   ListItem,
+  on,
   plugin,
   Progress,
   read,
@@ -41,7 +42,10 @@ async function refresh(): Promise<void> {
 }
 
 export function setup(ctx: PanelContext): void {
-  ctx.subscriptions.push(plugin.on('board.changed', () => void refresh()))
+  ctx.subscriptions.push(
+    plugin.on('board.changed', () => void refresh()),
+    on('workspace.changed', () => void refresh())
+  )
   void refresh()
 }
 
@@ -54,9 +58,22 @@ export default function Panel() {
   const error = read(failure)
   if (!data) return error ? <Text tone="danger">{error}</Text> : <Text muted>Loading…</Text>
 
+  if (data.focus === 'noFocus') return <EmptyState title="No project focused" description="Open a project to see its board." />
+  if (data.focus === 'none') {
+    return (
+      <EmptyState
+        title="This project does not use Orbit yet"
+        description="Ask an agent to use the orbit-project skill and run `orbit init`."
+      />
+    )
+  }
+
   const { agentCounts: counts } = data
   return (
     <Stack gap="md">
+      {data.focus === 'ambiguous' ? (
+        <Text muted size="xs">Could not tell which project is focused; showing the repos that may match.</Text>
+      ) : null}
       <Row justify="between">
         <Heading>Agents</Heading>
         <Badge tone={counts.working > 0 ? 'accent' : 'neutral'}>
@@ -81,13 +98,7 @@ export default function Panel() {
           ))}
         </List>
       )}
-      {data.repos.length === 0 ? (
-        <EmptyState
-          title="No .orbit folder yet"
-          description="Ask an agent to use the orbit-project skill and run `orbit init`."
-        />
-      ) : (
-        data.repos.map((repo) => (
+      {data.repos.map((repo) => (
           <Stack key={repo.root} gap="sm">
             <Row justify="between">
               <Heading level={2}>{repo.name}</Heading>
@@ -117,8 +128,7 @@ export default function Panel() {
               </Collapsible>
             ))}
           </Stack>
-        ))
-      )}
+      ))}
     </Stack>
   )
 }

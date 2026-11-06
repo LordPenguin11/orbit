@@ -1,9 +1,6 @@
 ---
 id: {{id}}
 title: {{title}}
-status: todo
-owner:
-workspace:
 plan: {{plan}}
 depends: [{{depends}}]
 created: {{date}}

@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { claim, findPrimaryRoot, listTasks, newItem, setStatus } from '../../../lib/store.mjs'
+import { claim, listTasks, migrate, newItem, setStatus } from '../../../lib/store.mjs'
 
 const { positionals, flags } = (() => {
   const positionals = []
@@ -25,35 +25,41 @@ const [cmd, sub, ...rest] = positionals
 const git = (...a) => execFileSync('git', a, { encoding: 'utf8' }).trim()
 
 try {
-  const root = findPrimaryRoot(process.cwd())
+  const cwd = process.cwd()
   if (cmd === 'init') {
-    for (const d of ['plans', 'docs', 'tasks']) mkdirSync(join(root, '.orbit', d), { recursive: true })
-    console.log(`${root}/.orbit ready`)
+    const top = git('rev-parse', '--show-toplevel')
+    for (const d of ['plans', 'docs', 'tasks']) mkdirSync(join(top, '.orbit', d), { recursive: true })
+    console.log(`${top}/.orbit ready`)
+  } else if (cmd === 'migrate') {
+    console.log(`migrated ${migrate(cwd)} task file(s)`)
   } else if (cmd === 'plan' || cmd === 'doc' || cmd === 'task') {
     if (sub === 'new') {
       const title = rest.join(' ') || fail(`${cmd} new needs a title`)
       const depends = typeof flags.depends === 'string' ? flags.depends.split(',').map((s) => s.trim()) : []
-      const { id } = newItem(root, cmd, title, { plan: flags.plan ?? '', depends })
+      const { id } = newItem(cwd, cmd, title, { plan: flags.plan ?? '', depends })
       console.log(id)
     } else if (cmd === 'task' && sub === 'claim') {
       const owner = flags.owner || process.env.ORBIT_AGENT || process.env.ORCA_PANE_KEY
       if (!owner) fail('no agent identity: pass --owner or set ORBIT_AGENT')
-      const data = claim(root, rest[0] ?? fail('claim needs a task id'), {
+      const id = rest[0] ?? fail('claim needs a task id')
+      claim(cwd, id, {
         owner,
         workspace: git('rev-parse', '--show-toplevel'),
         worktree: process.env.ORCA_WORKTREE_ID
       })
-      console.log(`${data.id} doing owner=${data.owner}`)
+      console.log(`${id} doing owner=${owner}`)
     } else if (cmd === 'task' && sub === 'status') {
       const note = typeof flags.note === 'string' ? flags.note : undefined
-      const data = setStatus(root, rest[0] ?? fail('status needs a task id'), rest[1] ?? fail('status needs a value'), note)
-      console.log(`${data.id} ${data.status}`)
+      const id = rest[0] ?? fail('status needs a task id')
+      const status = rest[1] ?? fail('status needs a value')
+      setStatus(cwd, id, status, note)
+      console.log(`${id} ${status}`)
     } else if (cmd === 'task' && sub === 'list') {
-      const tasks = listTasks(root, { status: typeof flags.status === 'string' ? flags.status : undefined })
+      const tasks = listTasks(cwd, { status: typeof flags.status === 'string' ? flags.status : undefined })
       if (flags.json) console.log(JSON.stringify(tasks, null, 2))
       else for (const t of tasks) console.log(`${t.id}\t${t.status}\t${t.owner || '-'}\t${t.title}`)
     } else fail(`unknown: ${cmd} ${sub ?? ''}`)
-  } else fail('commands: init | plan new | doc new | task new|claim|status|list')
+  } else fail('commands: init | migrate | plan new | doc new | task new|claim|status|list')
 } catch (e) {
   fail(e.message)
 }

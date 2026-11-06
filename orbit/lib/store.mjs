@@ -1,6 +1,12 @@
-// Orbit store: markdown+frontmatter files under <primary repo root>/.orbit. No dependencies.
+// Orbit store. No dependencies. Two homes with different lifetimes:
+//  - definitions (plans, docs, tasks) are markdown in <worktree>/.orbit/, tracked by git and merged across worktrees;
+//  - runtime state (status, owner, ...) is JSON in <git-common-dir>/orbit/state, shared by every worktree,
+//    never checked out, so a branch switch cannot touch it. Status changes also append to events.jsonl.
+// Every function takes `cwd`: any path inside the repo or one of its worktrees.
 import { execFileSync } from 'node:child_process'
 import {
+  appendFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -15,9 +21,12 @@ import { basename, dirname, join } from 'node:path'
 export const STATUSES = ['todo', 'doing', 'review', 'done', 'blocked']
 const KINDS = { task: ['tasks', 't'], plan: ['plans', 'p'], doc: ['docs', 'd'] }
 const ID_RE = /^[tpd]-\d+$/
+const RUNTIME_FIELDS = ['status', 'owner', 'workspace', 'worktree', 'note']
 const TEMPLATES = new URL('../skills/orbit-project/templates/', import.meta.url)
 
 const oneLine = (v) => String(v ?? '').replace(/\s*\n\s*/g, ' ').trim()
+const today = () => new Date().toISOString().slice(0, 10)
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
 export function parseFrontmatter(text) {
   const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text)
@@ -41,20 +50,32 @@ export function serialize(data, body) {
   return `---\n${lines.join('\n')}\n---\n${body}`
 }
 
+export const commonDir = (cwd) =>
+  realpathSync(git(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'))
+
 export function findPrimaryRoot(cwd) {
-  const common = execFileSync(
-    'git',
-    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
-    { cwd, encoding: 'utf8' }
-  ).trim()
-  return realpathSync(basename(common) === '.git' ? dirname(common) : common)
+  const common = commonDir(cwd)
+  return basename(common) === '.git' ? dirname(common) : common
 }
 
-const itemDir = (root, kind) => join(root, '.orbit', KINDS[kind][0])
+/** The main checkout first, then linked worktrees, as git lists them. */
+export function worktreePaths(cwd) {
+  return git(cwd, 'worktree', 'list', '--porcelain')
+    .split('\n')
+    .filter((l) => l.startsWith('worktree '))
+    .map((l) => l.slice('worktree '.length))
+    .filter((p) => existsSync(p))
+}
+
+export const stateRoot = (cwd) => join(commonDir(cwd), 'orbit')
+
+export const usesOrbit = (cwd) =>
+  existsSync(stateRoot(cwd)) || worktreePaths(cwd).some((p) => existsSync(join(p, '.orbit', 'tasks')))
 
 // ponytail: mkdir-based lock with spin; fine for a handful of agents, use proper flock if contention grows
 function withLock(file, fn) {
   const lock = `${file}.lock`
+  mkdirSync(dirname(file), { recursive: true })
   const start = Date.now()
   for (;;) {
     try {
@@ -76,21 +97,82 @@ function withLock(file, fn) {
   }
 }
 
-export function newItem(root, kind, title, { plan = '', depends = [] } = {}) {
-  const [folder, prefix] = KINDS[kind] ?? (() => { throw new Error(`unknown kind: ${kind}`) })()
-  const dir = itemDir(root, kind)
-  mkdirSync(dir, { recursive: true })
-  const existing = readdirSync(dir)
-    .map((f) => Number(new RegExp(`^${prefix}-(\\d+)\\.md$`).exec(f)?.[1] ?? 0))
-  for (let n = Math.max(0, ...existing) + 1; ; n++) {
-    const id = `${prefix}-${n}`
-    const vars = { id, title: oneLine(title), plan, depends: depends.join(', '), date: new Date().toISOString().slice(0, 10) }
-    const text = readFileSync(new URL(`${kind}.md`, TEMPLATES), 'utf8').replace(
-      /\{\{(\w+)\}\}/g,
-      (_, k) => vars[k] ?? ''
-    )
+function atomicWrite(file, text) {
+  const tmp = `${file}.${process.pid}.tmp`
+  writeFileSync(tmp, text)
+  renameSync(tmp, file)
+}
+
+/** id -> definition file, across worktrees; the first worktree holding an id wins (main checkout first). */
+function definitions(cwd, kind) {
+  const [folder, prefix] = KINDS[kind]
+  const re = new RegExp(`^(${prefix}-\\d+)\\.md$`)
+  const found = new Map()
+  for (const p of worktreePaths(cwd)) {
+    let files
     try {
-      writeFileSync(join(dir, `${id}.md`), text, { flag: 'wx' })
+      files = readdirSync(join(p, '.orbit', folder))
+    } catch {
+      continue
+    }
+    for (const f of files) {
+      const id = re.exec(f)?.[1]
+      if (id && !found.has(id)) found.set(id, join(p, '.orbit', folder, f))
+    }
+  }
+  return found
+}
+
+const stateFile = (cwd, id) => join(stateRoot(cwd), 'state', `${id}.json`)
+
+function readState(cwd, id) {
+  try {
+    return JSON.parse(readFileSync(stateFile(cwd, id), 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function updateState(cwd, id, mutate) {
+  const file = stateFile(cwd, id)
+  return withLock(file, () => {
+    const state = readState(cwd, id)
+    mutate(state)
+    state.updated = new Date().toISOString()
+    atomicWrite(file, JSON.stringify(state, null, 2))
+    appendFileSync(
+      join(stateRoot(cwd), 'events.jsonl'),
+      `${JSON.stringify({ ts: state.updated, id, status: state.status, owner: state.owner, note: state.note })}\n`
+    )
+    return state
+  })
+}
+
+function allocateId(cwd, kind) {
+  const prefix = KINDS[kind][1]
+  const countersFile = join(stateRoot(cwd), 'counters.json')
+  return withLock(countersFile, () => {
+    let counters = {}
+    try {
+      counters = JSON.parse(readFileSync(countersFile, 'utf8'))
+    } catch {}
+    const onDisk = [...definitions(cwd, kind).keys()].map((id) => Number(id.slice(2)))
+    const n = Math.max(counters[kind] ?? 0, ...onDisk) + 1
+    atomicWrite(countersFile, JSON.stringify({ ...counters, [kind]: n }))
+    return `${prefix}-${n}`
+  })
+}
+
+export function newItem(cwd, kind, title, { plan = '', depends = [] } = {}) {
+  const [folder] = KINDS[kind] ?? (() => { throw new Error(`unknown kind: ${kind}`) })()
+  const dir = join(git(cwd, 'rev-parse', '--show-toplevel'), '.orbit', folder)
+  mkdirSync(dir, { recursive: true })
+  const template = readFileSync(new URL(`${kind}.md`, TEMPLATES), 'utf8')
+  for (;;) {
+    const id = allocateId(cwd, kind)
+    const vars = { id, title: oneLine(title), plan, depends: depends.join(', '), date: today() }
+    try {
+      writeFileSync(join(dir, `${id}.md`), template.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? ''), { flag: 'wx' })
       return { id, folder }
     } catch (e) {
       if (e.code !== 'EEXIST') throw e
@@ -98,47 +180,74 @@ export function newItem(root, kind, title, { plan = '', depends = [] } = {}) {
   }
 }
 
-function updateTask(root, id, mutate) {
-  if (!ID_RE.test(id)) throw new Error(`bad id: ${id}`)
-  const file = join(itemDir(root, 'task'), `${id}.md`)
-  return withLock(file, () => {
-    const { data, body } = parseFrontmatter(readFileSync(file, 'utf8'))
-    mutate(data)
-    const tmp = `${file}.${process.pid}.tmp`
-    writeFileSync(tmp, serialize(data, body))
-    renameSync(tmp, file)
-    return data
+function definitionOf(cwd, id) {
+  if (!/^t-\d+$/.test(id)) throw new Error(`bad task id: ${id}`)
+  const file = definitions(cwd, 'task').get(id)
+  if (!file) throw new Error(`unknown task: ${id}`)
+  return file
+}
+
+export function claim(cwd, id, { owner, workspace, worktree }) {
+  const def = parseFrontmatter(readFileSync(definitionOf(cwd, id), 'utf8')).data
+  return updateState(cwd, id, (state) => {
+    const current = state.owner ?? def.owner
+    if (current && current !== owner) throw new Error(`task ${id} already owned by ${current}`)
+    Object.assign(state, { owner, workspace, status: 'doing' }, worktree ? { worktree } : {})
   })
 }
 
-export function claim(root, id, { owner, workspace, worktree }) {
-  return updateTask(root, id, (data) => {
-    if (data.owner && data.owner !== owner) {
-      throw new Error(`task ${id} already owned by ${data.owner}`)
-    }
-    Object.assign(data, { owner, workspace, status: 'doing' }, worktree ? { worktree } : {})
-  })
-}
-
-export function setStatus(root, id, status, note) {
+export function setStatus(cwd, id, status, note) {
   if (!STATUSES.includes(status)) {
     throw new Error(`bad status "${status}", use one of: ${STATUSES.join(', ')}`)
   }
-  return updateTask(root, id, (data) => {
-    data.status = status
-    if (note !== undefined) data.note = note
+  const file = definitionOf(cwd, id)
+  const state = updateState(cwd, id, (s) => {
+    s.status = status
+    if (note !== undefined) s.note = note
   })
+  if (status === 'done') {
+    // The one runtime fact git records: done is final enough to travel with the branch.
+    withLock(file, () => {
+      const { data, body } = parseFrontmatter(readFileSync(file, 'utf8'))
+      atomicWrite(file, serialize({ ...data, status: 'done', completed: data.completed || today() }, body))
+    })
+  }
+  return state
 }
 
-export function listTasks(root, { status } = {}) {
-  let files
-  try {
-    files = readdirSync(itemDir(root, 'task')).filter((f) => /^t-\d+\.md$/.test(f))
-  } catch {
-    return []
-  }
-  return files
-    .map((f) => parseFrontmatter(readFileSync(join(itemDir(root, 'task'), f), 'utf8')).data)
+export function listTasks(cwd, { status } = {}) {
+  return [...definitions(cwd, 'task')]
+    .map(([id, file]) => {
+      const def = parseFrontmatter(readFileSync(file, 'utf8')).data
+      const merged = { ...def, ...readState(cwd, id) }
+      return { ...merged, status: merged.status || 'todo' }
+    })
     .filter((t) => !status || t.status === status)
     .sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)))
+}
+
+// Old format: runtime fields lived in the definition. New format keeps only `status: done` + `completed`.
+const isLegacy = (d) =>
+  ['owner', 'workspace', 'worktree', 'note'].some((k) => k in d) ||
+  (d.status !== undefined && !(d.status === 'done' && d.completed))
+
+/** Move runtime fields of old-format task files into shared state. Returns how many files changed. */
+export function migrate(cwd) {
+  let changed = 0
+  for (const [id, file] of definitions(cwd, 'task')) {
+    const { data, body } = parseFrontmatter(readFileSync(file, 'utf8'))
+    if (!isLegacy(data)) continue
+    const runtime = Object.fromEntries(RUNTIME_FIELDS.filter((k) => data[k]).map((k) => [k, data[k]]))
+    if (Object.keys(runtime).length > 0) {
+      // State may already exist (written after the old store was replaced): fill gaps, never override it.
+      updateState(cwd, id, (s) => Object.assign(s, { ...runtime, ...s }))
+    }
+    const rest = Object.fromEntries(Object.entries(data).filter(([k]) => !RUNTIME_FIELDS.includes(k)))
+    if (data.status === 'done') {
+      Object.assign(rest, { status: 'done', completed: data.completed || statSync(file).mtime.toISOString().slice(0, 10) })
+    }
+    atomicWrite(file, serialize(rest, body))
+    changed++
+  }
+  return changed
 }

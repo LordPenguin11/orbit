@@ -21,20 +21,27 @@ function fixtureRepo(): string {
 }
 
 const repo = fixtureRepo()
+const plain = realpathSync(mkdtempSync(join(tmpdir(), 'orbit-check-plain-')))
+execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: plain, stdio: 'ignore' })
+
+const workspaces = [
+  { id: 'w1', kind: 'worktree', name: 'orbit-repo', path: repo, branch: 'main', hostId: null },
+  { id: 'w2', kind: 'worktree', name: 'plain-repo', path: plain, branch: 'main', hostId: null }
+]
+const focused = (displayName: string | null) => ({
+  'workspace.list': { workspaces, truncated: false },
+  'workspace.readContext': displayName ? { displayName, branch: 'main', terminals: [] } : null
+})
 
 export default defineCheck({
-  empty: { results: { 'workspace.list': { workspaces: [], truncated: false } } },
+  noFocus: { results: focused(null) },
+  noOrbit: { results: focused('plain-repo') },
   busy: {
-    results: {
-      'workspace.list': {
-        workspaces: [{ id: 'w1', kind: 'worktree', name: 'main', path: repo, branch: 'main', hostId: null }],
-        truncated: false
-      }
-    },
+    results: focused('orbit-repo'),
     events: [
       {
         event: 'agent.status.changed',
-        payload: { workspaceId: 'w1', paneKey: 'pane-1', title: 'Claude', state: 'working', receivedAt: Date.now() }
+        payload: { workspaceId: `w1::${repo}`, paneKey: 'pane-1', title: 'Claude', state: 'working', receivedAt: Date.now() }
       }
     ]
   }

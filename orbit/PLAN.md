@@ -1,6 +1,6 @@
 # Orbit step 1: project skill + progress board
 
-Status: step 1 xong. Rebrand (t-5) dừng có chủ đích, chờ tính năng cần sửa core.
+Status: step 1 + hooks + tách định nghĩa/trạng thái + panel bám project đang focus xong. Rebrand (t-5) dừng có chủ đích.
 
 ## Mục tiêu
 1. Skill `orbit-project`: agent lập plan, docs, task theo template.

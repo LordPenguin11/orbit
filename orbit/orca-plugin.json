@@ -3,9 +3,11 @@
   "execution": "trusted-worker",
   "id": "orbit-projects",
   "name": "Orbit Projects",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Kanban board of the repo's .orbit tasks with the agents working on them.",
-  "engines": { "orca": ">=1.4.246" },
+  "engines": {
+    "orca": ">=1.4.248"
+  },
   "pluginApi": 1,
   "main": "worker/main.mjs",
   "contributes": {
@@ -18,7 +20,51 @@
         "ui": "components"
       }
     ],
-    "events": [{ "on": "agent.status.changed" }]
+    "events": [
+      {
+        "on": "agent.status.changed"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "agent.tool.before"
+      },
+      {
+        "event": "agent.prompt.before"
+      }
+    ],
+    "settings": [
+      {
+        "key": "guardMode",
+        "title": "Agent guard",
+        "description": "block: remind agents and refuse file edits (Claude Code only) until a task is claimed. remind: only add a reminder to prompts Orca sends. off: do nothing.",
+        "type": "string",
+        "enum": [
+          "block",
+          "remind",
+          "off"
+        ],
+        "enumLabels": [
+          "Remind and block",
+          "Remind only",
+          "Off"
+        ],
+        "default": "block"
+      }
+    ]
   },
-  "capabilities": [{ "kind": "workspace:read" }, { "kind": "agent:read" }, { "kind": "storage:own" }]
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "agent:read"
+    },
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ]
 }

@@ -10,13 +10,19 @@ description: >-
 
 # Orbit project
 
-State lives in `<primary repo root>/.orbit/`, shared by every worktree of the repo:
+Two homes, both shared by every worktree of the repo:
 
 ```text
-.orbit/plans/<id>.md   one plan per goal
-.orbit/docs/<id>.md    long-lived notes (design, decisions, runbooks)
-.orbit/tasks/<id>.md   one file per task; frontmatter is the status
+<worktree>/.orbit/plans/<id>.md   plans, docs, tasks: definitions, tracked by git
+<worktree>/.orbit/docs/<id>.md    (created in the worktree you run `new` in, travel with that branch)
+<worktree>/.orbit/tasks/<id>.md
+<git common dir>/orbit/state/     live status, owner, note per task: not in git, never changes on checkout
 ```
+
+Commands read definitions from all worktrees at once and merge them with the shared state, so
+a task created on another branch is visible and claimable from yours. Marking a task `done`
+also records `status: done` and `completed:` in its definition, so it is committed with the work.
+Commit new definitions with your branch; never hand-edit status, owner or note.
 
 `ORBIT` below means `node <this skill dir>/scripts/orbit.mjs`. Run it from any worktree of the repo.
 Never edit task frontmatter by hand: use the commands, they write atomically.
@@ -49,3 +55,5 @@ for tools. Do not infer progress from chat history; the files are the source of 
 - One task, one owner. If `claim` reports another owner, pick a different task or ask the user.
 - Do not delete or rewrite other agents' tasks; change status only through the commands.
 - Do not commit `.orbit/` or change `.gitignore` unless the user asks.
+- The Orbit plugin may refuse Edit/Write calls ("Orbit guard") while no task is claimed in the
+  workspace. Claim a task as above; only the user may turn the guard off (plugin setting).
