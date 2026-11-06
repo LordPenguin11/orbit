@@ -307,6 +307,7 @@ export function useMobileTasksProjectFileMergeActions<Model extends ProjectFileM
                   client,
                   params: { repo: `id:${item.source.repoId}` },
                   ownerRepo: requireGitHubTaskTarget(item.source).repository,
+                  issueNumber: item.source.number,
                   send: (selected, exact, options) =>
                     githubIssueUpdate.request(
                       selected,
