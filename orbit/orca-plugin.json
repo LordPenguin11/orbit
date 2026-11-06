@@ -16,8 +16,8 @@
         "id": "board",
         "title": "Orbit",
         "icon": "layers",
-        "entry": "src/panel.tsx",
-        "ui": "components"
+        "entry": "panel/index.html",
+        "ui": "html"
       }
     ],
     "events": [

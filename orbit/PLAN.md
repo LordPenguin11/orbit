@@ -1,6 +1,6 @@
 # Orbit step 1: project skill + progress board
 
-Status: bước 3 xong (feature/bug/subtask, QA, archive, sizing, Run), kiểm chứng thật. Rebrand (t-5) dừng có chủ đích.
+Status: bước 4 (panel HTML) code xong, còn lint/review/kiểm trên app thật; bước 3 xong (feature/bug/subtask, QA, archive, sizing, Run), kiểm chứng thật. Rebrand (t-5) dừng có chủ đích.
 
 ## Mục tiêu
 1. Skill `orbit-project`: agent lập plan, docs, task theo template.
@@ -50,3 +50,13 @@ giá trị khởi đầu chưa đo, chỉnh trong `.orbit/config.json`. Nút Run
 - Template riêng từng loại; ghi đè bằng `.orbit/templates/<loại>.md`.
 - Archive: `.orbit/archive/<thư mục loại>/`, ẩn khỏi panel, task phụ thuộc vẫn tính là xong.
 - M1 (t-19..t-22): loại mới, QA, archive, CLI. M2 (t-23,t-24): sizing. M3 (t-25..t-27): panel và Run.
+
+## Step 4: panel HTML (f-1, t-31..t-35)
+Panel components (`ui: "components"`) không dựng được thiết kế Stitch (không có chấm trạng thái, chip, mono, căn phải), nên panel
+chuyển sang `ui: "html"` (`orbit/panel/`). Worker và `lib/` giữ nguyên; panel gọi `plugin.request` như trước.
+- Một cột 400px (mặc định List, nút chuyển Columns | List, nhớ lựa chọn): header repo + Board | Features | Agents + tiến độ. Board là các cột 300px cố định, cuộn ngang, snap, nút mũi tên;
+  cột rỗng và Done thu thành dải dọc. Không responsive co giãn.
+- Màu lấy từ token `--orca-*`; màu trạng thái riêng cho light/dark. Font Geist copy vào `panel/fonts` (frame CSP chỉ cho `self`).
+- Markdown tự viết (`panel/markdown.mjs`, escape trước), có test chống HTML thô.
+- Mockup tham chiếu: Stitch project "Orbit panel redesign". Bỏ phần Stitch tự thêm (P1/PR, New, filter, footer giả).
+- Ngoài phạm vi: planner terminal riêng, search/filter, kéo thả.
