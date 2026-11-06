@@ -7,11 +7,11 @@ created: {{date}}
 
 ## Goal
 
-What a user can do when this ships.
+<!-- What a user can do when this ships. -->
 
 ## Acceptance
 
-- [ ] Observable criterion
+- [ ] <!-- Observable criterion -->
 
 ## Out of scope
 
@@ -19,4 +19,4 @@ What a user can do when this ships.
 
 ## Notes
 
-Create its tasks and bugs with `--feature {{id}}`; the board lists them and rolls up progress.
+<!-- Create its tasks and bugs with `--feature {{id}}`; the board lists them and rolls up progress. -->

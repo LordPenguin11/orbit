@@ -20,6 +20,7 @@ import {
   taskDiff,
   unarchiveItem
 } from '../../../lib/store.mjs'
+import { shortOwner, visibleByDefault } from '../../../lib/format.mjs'
 import { assess } from '../../../lib/sizing.mjs'
 
 const CREATABLE = new Set(['plan', 'doc', 'feature', 'task', 'bug', 'subtask'])
@@ -127,9 +128,9 @@ try {
       }
     } else if (cmd === 'list') {
       const filter = { status: text('status'), kind: text('kind'), feature: text('feature') }
-      const items = flags.archived ? listArchived(cwd) : listWork(cwd, filter)
+      const items = flags.archived ? listArchived(cwd) : visibleByDefault(listWork(cwd, filter), { all: flags.all, status: filter.status })
       if (flags.json) console.log(JSON.stringify(items, null, 2))
-      else for (const t of items) console.log(`${t.id}\t${t.status}\t${t.owner || '-'}\t${t.title}`)
+      else for (const t of items) console.log(`${t.id}\t${t.status}\t${shortOwner(t.owner)}\t${t.title}`)
     } else {
       fail('commands: init | migrate | <plan|doc|feature|task|bug|subtask> new "<title>" | claim | status | diff | brief | size | assignees | archive | unarchive | list')
     }

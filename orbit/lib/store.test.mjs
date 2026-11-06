@@ -589,3 +589,11 @@ test('the_brief_names_the_assignee', () => {
     assert.match(readBrief(dir, id), /Assignee: skill:design-review/)
   })
 })
+
+test('a_fresh_tasks_brief_carries_no_template_instructions', () => {
+  const { dir } = tempRepo()
+  const out = readBrief(dir, make(dir, 'task', 'Fresh'))
+  assert.match(out, /## Goal/)
+  assert.match(out, /## Done when/)
+  assert.doesNotMatch(out, /One or two sentences|path\/to\/file|Verification command/)
+})

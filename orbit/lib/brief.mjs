@@ -1,5 +1,8 @@
 // The smallest context an agent needs to start a task: read this instead of scanning .orbit/.
 // Pure formatting; store.readBrief gathers the inputs.
+// Template hints live in <!-- --> comments so a person authoring a task sees them and an agent reading the brief does not.
+const withoutHints = (text) => text.replace(/<!--[\s\S]*?-->/g, '').replace(/\n{3,}/g, '\n\n')
+
 const firstGoalLine = (body = '') => {
   const goal = /##\s*(?:Goal|Do)\s*\n+([^\n#][^\n]*)/.exec(body)
   return goal ? goal[1].trim() : ''
@@ -15,5 +18,5 @@ export function formatBrief({ task, feature, parent, dependencies, subtasks, siz
   if (subtasks.length > 0) {
     lines.push('Subtasks:', ...subtasks.map((s) => `- ${s.id} [${s.status}] ${s.title}`))
   }
-  return `${lines.join('\n')}\n\n${task.body.trim()}\n`
+  return `${lines.join('\n')}\n\n${withoutHints(task.body).trim()}\n`
 }

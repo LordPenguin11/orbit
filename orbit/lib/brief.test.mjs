@@ -49,3 +49,11 @@ test('brief_shows_the_assignee_when_set', () => {
   assert.match(formatBrief({ task: { ...task, assignee: 'agent:swift-expert' }, feature: null, dependencies: [], subtasks: [] }), /Assignee: agent:swift-expert/)
   assert.doesNotMatch(formatBrief({ task, feature: null, dependencies: [], subtasks: [] }), /Assignee/)
 })
+
+test('brief_drops_authoring_hints_in_html_comments_and_collapses_the_gaps', () => {
+  const body = '\n## Goal\n\n<!-- One or two sentences. -->\n\n## Read first\n\n<!-- path/to/file: why -->\n\n## Steps\n\n- [ ] real step\n'
+  const out = formatBrief({ task: { ...task, body }, feature: null, dependencies: [], subtasks: [] })
+  assert.doesNotMatch(out, /<!--|One or two sentences|path\/to\/file/)
+  assert.match(out, /## Goal[\s\S]*## Read first[\s\S]*## Steps\n\n- \[ \] real step/)
+  assert.doesNotMatch(out, /\n{3,}/, 'no runs of blank lines')
+})

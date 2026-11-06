@@ -12,11 +12,11 @@ created: {{date}}
 
 ## Goal
 
-One or two sentences: what is true when this task is done.
+<!-- One or two sentences: what is true when this task is done. -->
 
 ## Read first
 
-- path/to/file: why this session needs it (list only what it needs; everything else stays unread)
+<!-- path/to/file: why this session needs it. List only what it needs; everything else stays unread. -->
 
 ## Steps
 
@@ -24,4 +24,4 @@ One or two sentences: what is true when this task is done.
 
 ## Done when
 
-- [ ] Verification command and its expected result
+- [ ] <!-- Verification command and its expected result -->

@@ -7,7 +7,7 @@ created: {{date}}
 
 ## Do
 
-One line.
+<!-- One line. -->
 
 ## Done when
 
